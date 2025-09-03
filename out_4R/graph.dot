@@ -1,0 +1,25 @@
+digraph ScriptGraph {
+  rankdir=LR;
+  "lib/common.ps1";
+  "load.sh";
+  "post.sh";
+  "prep.cmd";
+  "process.py";
+  "ps/stage.ps1";
+  "run.sh";
+  "tools/helper.cmd";
+  "utils/cleanup-prod.sh";
+  "utils/cleanup.sh";
+  "windows/main.bat";
+  "windows/prep.cmd";
+  "windows/ps/lib/common.ps1";
+  "windows/ps/stage.ps1";
+  "windows/tools/helper.cmd";
+  "run.sh" -> "load.sh" [label="call", color="black"];
+  "windows/main.bat" -> "prep.cmd" [label="call", color="black"];
+  "windows/main.bat" -> "ps/stage.ps1" [label="call", color="black"];
+  "windows/prep.cmd" -> "tools/helper.cmd" [label="call", color="black"];
+  "windows/ps/stage.ps1" -> "lib/common.ps1" [label="source", color="black"];
+  "run.sh" -> "utils/cleanup.sh" [label="source", color="blue"];
+  "post.sh" -> "utils/cleanup-prod.sh" [label="source", color="blue"];
+}

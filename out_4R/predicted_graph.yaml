@@ -1,0 +1,77 @@
+nodes:
+- lib/common.ps1
+- load.sh
+- post.sh
+- prep.cmd
+- process.py
+- ps/stage.ps1
+- run.sh
+- tools/helper.cmd
+- utils/cleanup-prod.sh
+- utils/cleanup.sh
+- windows/main.bat
+- windows/prep.cmd
+- windows/ps/lib/common.ps1
+- windows/ps/stage.ps1
+- windows/tools/helper.cmd
+edges:
+- src: run.sh
+  dst: load.sh
+  kind: call
+  command: bash ./load.sh
+  dynamic: false
+  resolved: true
+  confidence: 0.9
+  reason: null
+- src: windows/main.bat
+  dst: prep.cmd
+  kind: call
+  command: call prep.cmd
+  dynamic: false
+  resolved: true
+  confidence: 0.9
+  reason: null
+- src: windows/main.bat
+  dst: ps/stage.ps1
+  kind: call
+  command: powershell -File .\ps\stage.ps1
+  dynamic: false
+  resolved: true
+  confidence: 0.8
+  reason: null
+- src: windows/prep.cmd
+  dst: tools/helper.cmd
+  kind: call
+  command: call tools\helper.cmd
+  dynamic: false
+  resolved: true
+  confidence: 0.9
+  reason: null
+- src: windows/ps/stage.ps1
+  dst: lib/common.ps1
+  kind: source
+  command: . .\lib\common.ps1
+  dynamic: false
+  resolved: true
+  confidence: 0.9
+  reason: null
+- src: run.sh
+  dst: utils/cleanup.sh
+  kind: source
+  command: source ${UTILS}/cleanup.sh
+  dynamic: true
+  resolved: true
+  confidence: 0.7
+  reason: ${UTILS} -> ./utils (from hints); './utils/cleanup.sh' normalized and './'
+    stripped -> 'utils/cleanup.sh'. Matches allowed_paths and has a plausible script
+    extension (.sh).
+- src: post.sh
+  dst: utils/cleanup-prod.sh
+  kind: source
+  command: source ${UTILS}/cleanup-${ENV}.sh
+  dynamic: true
+  resolved: true
+  confidence: 0.7
+  reason: "ENV expanded to 'prod', producing pattern ${UTILS}/cleanup-prod.sh. UTILS\
+    \ not provided, so match against allowed_paths \u2014 only 'utils/cleanup-prod.sh'\
+    \ fits the resulting pattern, returned relative to project root."

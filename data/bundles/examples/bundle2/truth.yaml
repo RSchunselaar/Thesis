@@ -1,0 +1,24 @@
+nodes:
+  - lib/common.ps1
+  - load.sh
+  - post.sh
+  - prep.cmd
+  - process.py
+  - ps/stage.ps1
+  - run.sh
+  - tools/helper.cmd
+  - utils/cleanup-prod.sh
+  - utils/cleanup.sh
+  - windows/main.bat
+  - windows/prep.cmd
+  - windows/ps/lib/common.ps1
+  - windows/ps/stage.ps1
+  - windows/tools/helper.cmd
+edges:
+  - { src: run.sh, dst: load.sh, kind: call }
+  - { src: windows/main.bat, dst: prep.cmd, kind: call }
+  - { src: windows/main.bat, dst: ps/stage.ps1, kind: call }
+  - { src: windows/prep.cmd, dst: tools/helper.cmd, kind: call }
+  - { src: windows/ps/stage.ps1, dst: lib/common.ps1, kind: source }
+  - { src: run.sh, dst: utils/cleanup.sh, kind: source }
+  - { src: post.sh, dst: utils/cleanup-prod.sh, kind: source }

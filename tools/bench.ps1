@@ -1,25 +1,34 @@
 param(
   [string]$DataRoot = "data/bundles",
-  [string[]]$Roles = @("2R","4R"),
+  # We benchmark three systems: static (scan only), 2R and 4R
+  [string[]]$Systems = @("static","2R","4R"),
   [string]$Config = "config.example.yaml"
 )
 $ErrorActionPreference = "Stop"
+
 New-Item -ItemType Directory -Force artifacts | Out-Null
-Remove-Item artifacts\bench_results.jsonl -ErrorAction SilentlyContinue
+$outFile = "artifacts/bench_results.jsonl"
+Remove-Item $outFile -ErrorAction SilentlyContinue
 
 $truthFiles = Get-ChildItem -Path $DataRoot -Recurse -Filter truth.yaml
 foreach ($tf in $truthFiles) {
-  $truth = $tf.FullName
-  $bundleDir = $tf.DirectoryName
+  $truth      = $tf.FullName
+  $bundleDir  = $tf.DirectoryName
   $bundleName = Split-Path $bundleDir -Leaf
-  foreach ($r in $Roles) {
-    $out = "artifacts/$($bundleName)-$r"
-    scriptgraph agents $bundleDir --roles $r --out $out --config $Config | Out-Null
+
+foreach ($sys in $Systems) {
+    $out = "artifacts/$($bundleName)-$sys"
+    if ($sys -eq "static") {
+      # static baseline: scanner only (no agent mapping)
+      scriptgraph scan $bundleDir --out $out --config $Config | Out-Null
+    } else {
+      scriptgraph agents $bundleDir --roles $sys --out $out --config $Config | Out-Null
+    }
     $pred = "$out/predicted_graph.yaml"
     $score = scriptgraph score --pred $pred --truth $truth | Out-String | ConvertFrom-Json
-    $obj = @{ bundle=$bundleName; role=$r; score = $score }
-    $line = $obj | ConvertTo-Json -Depth 6
-    Add-Content -Path "artifacts/bench_results.jsonl" -Value $line
+    $obj = @{ bundle=$bundleName; role=$sys; score = $score }
+    $line = $obj | ConvertTo-Json -Depth 10 -Compress
+    Add-Content -Path $outFile -Value $line
   }
 }
-Write-Host "Wrote artifacts/bench_results.jsonl"
+Write-Host "Wrote $outFile"

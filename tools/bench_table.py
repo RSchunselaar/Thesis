@@ -15,7 +15,8 @@ def main(path: str):
         role=r.get("role","")
         s=r.get("score",{})
         by_role.setdefault(role, []).append(s)
-    print("| System | N | Node‑F1 | Edge‑F1 | GCR |")
+    # ASCII-only header to avoid Windows cp1252 encoding issues
+    print("| System | N | Node F1 | Edge F1 | GCR |")
     print("|:--|--:|--:|--:|--:|")
     for role, arr in sorted(by_role.items()):
         n=len(arr)
