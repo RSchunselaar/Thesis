@@ -1,5 +1,5 @@
 param(
-  [string]$Folder = "examples/bundle1",
+  [string]$Folder = "data/bundles/examples/bundle1",
   [string]$Truth = "data/bundles/examples/bundle1/truth.yaml",
   [string]$Out = "out",
   [string]$Config = "config.example.yaml"

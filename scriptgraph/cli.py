@@ -12,7 +12,7 @@ from .agent_mapper import AgentMapper
 from .graph import Graph, Edge
 from .stats_cmd import summarize_graph, summarize_runs, print_graph_stats, print_run_stats  
 from .env import load_env_file
-from .metrics import cli as score_cli
+from .metrics import score_pair
 
 load_env_file()  # picks up OPENAI_API_KEY / AZURE_OPENAI_API_KEY from .env
 
@@ -33,6 +33,12 @@ def _write_outputs(out_dir: Path, g: Graph):
     (out_dir / "graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
     (out_dir / "graph.dot").write_text(g.to_dot(), encoding="utf-8")
     (out_dir / "predicted_graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
+
+def cmd_score(args):
+    pred = yaml.safe_load(Path(args.pred).read_text(encoding="utf-8")) or {}
+    truth = yaml.safe_load(Path(args.truth).read_text(encoding="utf-8")) or {}
+    s = score_pair(pred, truth, case_sensitive=not args.case_insensitive)
+    print(json.dumps(s.__dict__, indent=2))
 
 def _llm_from_config(cfg):
     if not HAS_LLM:
@@ -233,7 +239,7 @@ def main():
     pscr.add_argument("--pred", required=True, help="Path to predicted_graph.yaml")
     pscr.add_argument("--truth", required=True, help="Path to truth graph.yaml")
     pscr.add_argument("--case-insensitive", action="store_true", help="Windows-only bundles")
-    pscr.set_defaults(func=lambda args: score_cli())
+    pscr.set_defaults(func=cmd_score)
 
     # multi-agent subcommand (only shows if module present)
     if HAS_AGENTS:
