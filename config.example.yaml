@@ -1,7 +1,10 @@
 llm:
   provider: openai # disabled | openai | azure
   model: gpt-5-mini # for openai provider
-# temperature: 0.0
+  # For GPT‑5 family keep provider defaults; do not set temperature unless using non‑GPT‑5 models.
+  # temperature: 0.0
+  # max_tokens: 800
+
 # OpenAI settings (used when provider: openai)
 openai:
   base_url: https://api.openai.com
@@ -12,7 +15,7 @@ azure:
   api_version: 2024-08-01-preview
 
 runtime:
-  egress: true # set true to allow external API calls
+  egress: false # thesis default: no‑egress (enable per experiment as needed)
   sqlite_path: ./out/runlog.sqlite
 
 privacy:

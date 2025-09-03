@@ -1,0 +1,21 @@
+# Minimal truth for examples/bundle1
+# Paths are repo-relative (scorer canonicalizes).
+nodes:
+  - examples/bundle1/run.sh
+  - examples/bundle1/load.sh
+  - examples/bundle1/post.sh
+  - examples/bundle1/process.py
+  - examples/bundle1/utils/cleanup.sh
+edges:
+  - { src: examples/bundle1/run.sh, dst: examples/bundle1/load.sh, kind: call }
+  - {
+      src: examples/bundle1/run.sh,
+      dst: examples/bundle1/utils/cleanup.sh,
+      kind: source,
+    }
+  - { src: examples/bundle1/load.sh, dst: examples/bundle1/post.sh, kind: call }
+  - {
+      src: examples/bundle1/process.py,
+      dst: examples/bundle1/post.sh,
+      kind: call,
+    }

@@ -14,6 +14,8 @@ class LLMConfig:
     azure_deployment: str | None = None
     azure_api_version: str = "2024-08-01-preview"
     json_mode: bool = True
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class LLMClient:
@@ -41,7 +43,7 @@ class LLMClient:
             "messages": [{"role":"system","content":system},{"role":"user","content":user}],
         }
         # GPT-5 family: omit temperature + response_format
-        if not model.startswith("gpt-5") and self.cfg.temperature is not None:
+        if not model.startswith("gpt-5") and (self.cfg.temperature is not None):
             payload["temperature"] = self.cfg.temperature
         if self.cfg.json_mode and not model.startswith("gpt-5"):
             payload["response_format"] = {"type":"json_object"}
@@ -75,9 +77,9 @@ class LLMClient:
         url = f"{self.cfg.azure_endpoint}/openai/deployments/{self.cfg.azure_deployment}/chat/completions?api-version={self.cfg.azure_api_version}"
         payload = {
             "messages": [{"role":"system","content":system},{"role":"user","content":user}],
-            "max_tokens": self.cfg.max_tokens,
         }
-        # Same GPT-5 rules for temperature/JSON mode if deployment is GPT-5*
+        if self.cfg.max_tokens:
+            payload["max_tokens"] = int(self.cfg.max_tokens)
         if self.cfg.temperature is not None:
             payload["temperature"] = self.cfg.temperature
         if self.cfg.json_mode:

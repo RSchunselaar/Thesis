@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import yaml
+import json
 from pathlib import Path
 from .config import Config
 from .utils import disable_network
@@ -11,6 +12,7 @@ from .agent_mapper import AgentMapper
 from .graph import Graph, Edge
 from .stats_cmd import summarize_graph, summarize_runs, print_graph_stats, print_run_stats  
 from .env import load_env_file
+from .metrics import cli as score_cli
 
 load_env_file()  # picks up OPENAI_API_KEY / AZURE_OPENAI_API_KEY from .env
 
@@ -30,6 +32,7 @@ def _write_outputs(out_dir: Path, g: Graph):
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
     (out_dir / "graph.dot").write_text(g.to_dot(), encoding="utf-8")
+    (out_dir / "predicted_graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
 
 def _llm_from_config(cfg):
     if not HAS_LLM:
@@ -40,6 +43,8 @@ def _llm_from_config(cfg):
             provider="openai",
             model=getattr(cfg.llm, "model", "") or "gpt-5-mini",
             openai_base=(getattr(cfg.llm, "openai", {}) or {}).get("base_url", "https://api.openai.com"),
+            temperature=getattr(cfg.llm, "temperature", None),
+            max_tokens=getattr(cfg.llm, "max_tokens", None),
         ))
     if prov == "azure":
         az = getattr(cfg.llm, "azure", {}) or {}
@@ -49,6 +54,8 @@ def _llm_from_config(cfg):
             azure_endpoint=az.get("endpoint"),
             azure_deployment=az.get("deployment"),
             azure_api_version=az.get("api_version", "2025-08-01-preview"),
+            temperature=getattr(cfg.llm, "temperature", None),
+            max_tokens=getattr(cfg.llm, "max_tokens", None),
         ))
     return None
 
@@ -220,6 +227,13 @@ def main():
     pw = sub.add_parser("watch", help="Tail run progress from SQLite")
     pw.add_argument("--config", default="config.example.yaml", help="Config file")
     pw.set_defaults(func=cmd_watch)
+
+    # Score command
+    pscr = sub.add_parser("score", help="Score predicted_graph.yaml vs. ground truth")
+    pscr.add_argument("--pred", required=True, help="Path to predicted_graph.yaml")
+    pscr.add_argument("--truth", required=True, help="Path to truth graph.yaml")
+    pscr.add_argument("--case-insensitive", action="store_true", help="Windows-only bundles")
+    pscr.set_defaults(func=lambda args: score_cli())
 
     # multi-agent subcommand (only shows if module present)
     if HAS_AGENTS:

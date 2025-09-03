@@ -3,3 +3,16 @@
 /dist/
 /*.egg-info/
 .env
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+out/
+demo_out/
+artifacts/
+*.sqlite
+*.db
+.DS_Store
+*.png
+*.zip

@@ -41,7 +41,9 @@ class AgentMapper:
             # 1) Heuristic substitution
             candidate = self._subst(e.dst, var_env)
             if candidate != e.dst:
-                new_edges.append(self._mk_resolved(e, candidate, reason="local var substitution"))
+                new_edges.append(self._resolved_edge(
+                    e, candidate, self._conf_subst(root, candidate), reason="local var substitution"
+                ))
                 continue
 
             # 2) LLM resolution (if available and network allowed)

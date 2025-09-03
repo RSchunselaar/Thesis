@@ -110,7 +110,8 @@ def _llm_plan(client: Optional[LLMClient], edges: List[Tuple[str, str]]) -> Tupl
     # Trim to a small prompt
     items = [{"src": s, "command": c} for s, c in edges[:40]]
     user = json.dumps({"unresolved": items}, ensure_ascii=False)
-    data = _json_load(client.chat(PLANNER_PROMPT, user))
+    content, meta = client.chat(PLANNER_PROMPT, user, return_meta=True)
+    data = _json_load(content)
     wl = data.get("worklist") or []
     why = data.get("reasoning", "")
     # Keep only sources that actually exist in the candidate set
@@ -123,7 +124,8 @@ def _llm_read_hints(client: Optional[LLMClient], src_path: str, snippet: str) ->
         return {}, ""
     red = Redactor()
     user = json.dumps({"source": src_path, "snippet": red.redact(snippet[:4000])}, ensure_ascii=False)
-    data = _json_load(client.chat(READER_PROMPT, user))
+    content, meta = client.chat(READER_PROMPT, user, return_meta=True)
+    data = _json_load(content)
     hints = {}
     d = data.get("hints") or {}
     if isinstance(d, dict):
@@ -504,9 +506,17 @@ class AgentRunner:
         # Budget (could come from cfg)
         budget = {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1}
 
-        manifest = planner.run(io, budget=budget)
-        obs      = reader.run(io, manifest)
-        snap     = mapper.run(io, obs, manifest.policy)
+        import time
+        if self.roles == "4R":
+            t0 = time.monotonic(); manifest = planner.run(io, budget=budget); self.logger.log_role_latency("Planner", time.monotonic()-t0)
+            t0 = time.monotonic(); obs      = reader.run(io, manifest);       self.logger.log_role_latency("Reader",  time.monotonic()-t0)
+            t0 = time.monotonic(); snap     = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
+        else:  # "2R": Reader -> Mapper only
+            # Minimal manifest for Reader
+            manifest = ReadManifest(files=[{"path": p, "priority":10, "peek":[(0,4096)]} for p in Planner(self.client,self.logger)._light_crawl(io.root)],
+                                    env_hints={}, policy={"workdir":"."}, budget=budget)
+            t0 = time.monotonic(); obs  = reader.run(io, manifest);            self.logger.log_role_latency("Reader",  time.monotonic()-t0)
+            t0 = time.monotonic(); snap = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
 
         # Optional extra loop if many unresolved (bounded)
         if snap.unresolved and budget["max_loops"] > 0:
@@ -521,9 +531,14 @@ class AgentRunner:
             snap  = mapper.run(io, obs2, manifest.policy)
 
         outp = Path(out_dir)
-        writer.run(io, outp, snap)
+        if self.roles == "4R":
+            writer.run(io, outp, snap)
+        else:
+            # Emit artifacts without LLM Writer
+            (outp).mkdir(parents=True, exist_ok=True)
+            (outp / "predicted_graph.yaml").write_text(snap.graph.to_yaml(), encoding="utf-8")
+            (outp / "graph.dot").write_text(snap.graph.to_dot(), encoding="utf-8")
         return snap.graph
-
 
 def llm_from_config(cfg) -> LLMClient:
     if cfg.llm.provider == "openai":

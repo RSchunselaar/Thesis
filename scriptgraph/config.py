@@ -20,6 +20,8 @@ class LlmCfg:
     model_path: str = ""  # for local models later
     openai: Dict[str, Any] = field(default_factory=dict)
     azure: Dict[str, Any] = field(default_factory=dict)
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 @dataclass

@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS llm_calls(
   reasoning TEXT,
   FOREIGN KEY(run_id) REFERENCES runs(id)
 );
+CREATE TABLE IF NOT EXISTS role_latencies(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  seconds REAL NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES runs(id)
+);
 """
 
 @dataclass
@@ -106,6 +113,14 @@ class RunLogger:
                 status,
                 (reasoning or "")[:1000],
             ),
+        )
+        self.conn.commit()
+
+    def log_role_latency(self, role: str, seconds: float):
+        assert self._run_id is not None
+        self.conn.execute(
+            "INSERT INTO role_latencies(run_id, role, seconds) VALUES (?, ?, ?)",
+            (self._run_id, role, float(seconds)),
         )
         self.conn.commit()
 
