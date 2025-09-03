@@ -47,6 +47,9 @@ class ParsingCfg:
         ]
     )
 
+@dataclass
+class AgentsCfg:
+    reader_hints: bool = False
 
 @dataclass
 class Config:
@@ -54,6 +57,7 @@ class Config:
     runtime: RuntimeCfg = field(default_factory=RuntimeCfg)
     privacy: PrivacyCfg = field(default_factory=PrivacyCfg)
     parsing: ParsingCfg = field(default_factory=ParsingCfg)
+    agents: AgentsCfg = field(default_factory=AgentsCfg)
 
     @staticmethod
     def load(path: str) -> "Config":
@@ -70,7 +74,8 @@ class Config:
         runtime = RuntimeCfg(**merged(RuntimeCfg(), data.get("runtime", {})))
         privacy = PrivacyCfg(**merged(PrivacyCfg(), data.get("privacy", {})))
         parsing = ParsingCfg(**merged(ParsingCfg(), data.get("parsing", {})))
-        return Config(llm=llm, runtime=runtime, privacy=privacy, parsing=parsing)
+        agents  = AgentsCfg(**merged(AgentsCfg(),  data.get("agents", {})))
+        return Config(llm=llm, runtime=runtime, privacy=privacy, parsing=parsing, agents=agents)
 
     def hash(self) -> str:
         buf = io.StringIO()

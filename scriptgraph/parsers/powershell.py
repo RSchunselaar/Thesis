@@ -4,9 +4,9 @@ from pathlib import Path
 from ..graph import Edge
 from ..utils import strip_comments
 
-# & "./x.ps1" or ./x.ps1 or . .\x.ps1 (dot-sourcing)
-CALL_RE = re.compile(r"(?:&\s+)?([\w./\\-]+\.ps1)")
-DOTSRC_RE = re.compile(r"^\s*\.\s+([\w./\\-]+\.ps1)")
+# & "./x.ps1" or & '.\x.ps1' or ./x.ps1 or . .\x.ps1 (dot-sourcing)
+CALL_RE = re.compile(r"(?:&\s+)?['\"]?([\w./\\-]+\.ps1)['\"]?")
+DOTSRC_RE = re.compile(r"^\s*\.\s+['\"]?([\w./\\-]+\.ps1)['\"]?")
 DYN_HINT = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$\(|Invoke-Expression")
 
 

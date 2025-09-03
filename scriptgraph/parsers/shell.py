@@ -35,6 +35,9 @@ def _destinations(cmd: str) -> Iterable[str]:
     for m in CALL_RE.finditer(cmd):
         p = m.group("path1") or m.group("path2") or m.group("path3")
         if p:
+            # ignore variable assignments like FOO=./x.sh
+            if "=" in p.split("/")[0]:
+                continue
             # strip surrounding quotes if present
             if (p.startswith("'") and p.endswith("'")) or (p.startswith('"') and p.endswith('"')):
                 p = p[1:-1]

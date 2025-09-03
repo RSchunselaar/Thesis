@@ -1,29 +1,13 @@
 # Minimal truth for examples/bundle1
-# Paths are repo-relative (scorer canonicalizes).
+# Paths are BUNDLE-relative (scorer canonicalizes). Keep this aligned with predictions.
 nodes:
-  - data/bundles/examples/bundle1/run.sh
-  - examples/bundle1/load.sh
-  - data/bundles/examples/bundle1/post.sh
-  - data/bundles/examples/bundle1/process.py
-  - data/bundles/examples/bundle1/utils/cleanup.sh
+  - run.sh
+  - load.sh
+  - post.sh
+  - process.py
+  - utils/cleanup.sh
 edges:
-  - {
-      src: data/bundles/examples/bundle1/run.sh,
-      dst: data/bundles/examples/bundle1/load.sh,
-      kind: call,
-    }
-  - {
-      src: data/bundles/examples/bundle1/run.sh,
-      dst: data/bundles/examples/bundle1/utils/cleanup.sh,
-      kind: source,
-    }
-  - {
-      src: data/bundles/examples/bundle1/load.sh,
-      dst: data/bundles/examples/bundle1/post.sh,
-      kind: call,
-    }
-  - {
-      src: data/bundles/examples/bundle1/process.py,
-      dst: data/bundles/examples/bundle1/post.sh,
-      kind: call,
-    }
+  - { src: run.sh, dst: load.sh, kind: call }
+  - { src: run.sh, dst: utils/cleanup.sh, kind: source }
+  - { src: load.sh, dst: post.sh, kind: call }
+  - { src: process.py, dst: post.sh, kind: call }

@@ -1,0 +1,2 @@
+run.sh
+windows/main.bat

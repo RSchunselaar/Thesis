@@ -42,7 +42,7 @@ def _write_outputs(out_dir: Path, g: Graph):
 def cmd_score(args):
     pred = yaml.safe_load(Path(args.pred).read_text(encoding="utf-8")) or {}
     truth = yaml.safe_load(Path(args.truth).read_text(encoding="utf-8")) or {}
-    s = score_pair(pred, truth, case_sensitive=not args.case_insensitive)
+    s = score_pair(pred, truth, case_sensitive=not args.case_insensitive, pred_prefix=getattr(args, "pred_prefix", None))
     print(json.dumps(s.__dict__, indent=2))
 
 def _llm_from_config(cfg):
@@ -150,10 +150,11 @@ def cmd_agents(args):
         g = scanner.scan(args.folder)
         client = llm_from_config(cfg)
         red = Redactor(cfg.privacy.redact_paths, cfg.privacy.redact_ips, cfg.privacy.redact_emails) if Redactor else None
+        use_hints = bool(args.reader_hints or getattr(getattr(cfg, "agents", {}), "reader_hints", False))
         runner = AgentRunner(args.roles, client, logger,
                              log_prompts=bool(getattr(cfg.privacy, "log_prompts", False)),
                              redactor=red,
-                             use_llm_reader_hints=False)  # keep OFF unless explicitly desired
+                             use_llm_reader_hints=use_hints)
         g2 = runner.run(args.folder, g, args.out)
         logger.log("INFO", f"agents {args.roles} finished; nodes={len(g2.nodes)} edges={len(g2.edges)}")
     finally:
@@ -248,6 +249,7 @@ def main():
     pscr.add_argument("--pred", required=True, help="Path to predicted_graph.yaml")
     pscr.add_argument("--truth", required=True, help="Path to truth graph.yaml")
     pscr.add_argument("--case-insensitive", action="store_true", help="Windows-only bundles")
+    pscr.add_argument("--pred-prefix", help="Prefix to prepend to predicted paths before scoring")
     pscr.set_defaults(func=cmd_score)
 
     # multi-agent subcommand (only shows if module present)
@@ -257,6 +259,7 @@ def main():
         pag.add_argument("--roles", default="4R", choices=["2R", "4R"], help="Agent configuration")
         pag.add_argument("--out", default="./out", help="Output directory")
         pag.add_argument("--config", default="config.example.yaml", help="Config file")
+        pag.add_argument("--reader-hints", action="store_true", help="Enable conservative LLM reader hints")
         pag.set_defaults(func=cmd_agents)
 
     args = p.parse_args()

@@ -180,14 +180,33 @@ class Planner:
                     pass
         return sorted(set(paths))
 
+    def _load_seeds(self, root: Path) -> set[str]:
+        seeds: set[str] = set()
+        for name in ("seeds.txt", ".seeds"):
+            p = root / name
+            if p.exists():
+                try:
+                    for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        s = (line or "").strip()
+                        if not s or s.startswith("#"): continue
+                        s = s.replace("\\","/").lstrip("./")
+                        seeds.add(s)
+                except Exception:
+                    pass
+        return seeds    
+
     def run(self, io: RoleIO, budget: dict | None = None) -> ReadManifest:
         root = io.root
         files = self._light_crawl(root)
+        seeds = self._load_seeds(root)
         # entrypoints first
         prio = {}
         for f in files:
             base = f.rsplit("/",1)[-1].lower()
-            prio[f] = 100 if base in {"run.sh","main.bat","start.cmd"} else 10
+            p = 10
+            if f in seeds: p = 500
+            elif base in {"run.sh","main.bat","start.cmd"}: p = 100
+            prio[f] = p
         # normalization policy (simple, extend later)
         policy = {
             "canon_slashes": True,
@@ -376,6 +395,10 @@ class Mapper:
 
         # seed nodes with discovered files
         for f in obs.files: g.add_node(f["path"])
+        # carry over STATIC edges from the initial scan (never regress on static)
+        for e in getattr(io, "graph", Graph()).edges:
+            if not e.dynamic:
+                g.add_edge(e)
 
         # Allowed list for LLM prompt + Python-side guard
         allowed_set = {f["path"] for f in obs.files}
@@ -532,7 +555,9 @@ class AgentRunner:
         io = RoleIO(root=Path(root_dir).resolve(), graph=base_graph)
         planner = Planner(self.client, self.logger)
         reader  = Reader(self.client, self.logger, log_prompts=self.log_prompts, use_llm_hints=self.use_llm_reader_hints, redactor=self._redactor)
-        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=False, log_prompts=self.log_prompts, redactor=self._redactor)  # LLM-first
+        # if egress is off or provider is disabled, allow heuristic fallback
+        allow_fallback = (self.client.cfg.provider == "disabled")
+        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=allow_fallback, log_prompts=self.log_prompts, redactor=self._redactor)  # LLM-first
         writer  = Writer(self.client, self.logger)
 
         # Budget (could come from cfg)
@@ -550,9 +575,15 @@ class AgentRunner:
             t0 = time.monotonic(); obs      = reader.run(io, manifest);       self.logger.log_role_latency("Reader",  time.monotonic()-t0)
             t0 = time.monotonic(); snap     = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
         else:  # "2R": Reader -> Mapper only
-            # Minimal manifest for Reader
-            manifest = ReadManifest(files=[{"path": p, "priority":10, "peek":[(0,4096)]} for p in Planner(self.client,self.logger)._light_crawl(io.root)],
-                                    env_hints={}, policy={"workdir":"."}, budget=budget)
+            pl = Planner(self.client, self.logger)
+            files = pl._light_crawl(io.root)
+            seeds = pl._load_seeds(io.root)
+            # Minimal manifest for Reader (honor seeds)
+            flist = []
+            for pth in files:
+                pr = 500 if pth in seeds else 10
+                flist.append({"path": pth, "priority": pr, "peek":[(0,4096)]})
+            manifest = ReadManifest(files=flist, env_hints={}, policy={"workdir":"."}, budget=budget)
             t0 = time.monotonic(); obs  = reader.run(io, manifest);            self.logger.log_role_latency("Reader",  time.monotonic()-t0)
             t0 = time.monotonic(); snap = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
 

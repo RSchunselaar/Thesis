@@ -26,3 +26,6 @@ privacy:
 
 parsing:
   include_ext: [".sh", ".bash", ".ksh", ".bat", ".cmd", ".ps1", ".pl", ".py"]
+
+agents:
+  reader_hints: false # when true, prompts the Reader to infer path-like env vars (conservative)

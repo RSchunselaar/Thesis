@@ -18,18 +18,14 @@ class CallVisitor(ast.NodeVisitor):
         except Exception:
             func = ""
         if func in {"run", "Popen", "call", "system"}:
-            # string literal arg
-            if node.args:
-                arg0 = node.args[0]
-            if (
-                isinstance(arg0, ast.List)
-                and arg0.elts
-                and isinstance(arg0.elts[0], ast.Constant)
-            ):
-                val = " ".join(
-                    [e.value for e in arg0.elts if isinstance(e, ast.Constant)]
-                )
+            if not node.args:
+                self.generic_visit(node); return
+            arg0 = node.args[0]
+            # subprocess.run(["bash","./x.sh", ...])
+            if isinstance(arg0, ast.List) and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in arg0.elts):
+                val = " ".join(e.value for e in arg0.elts)
                 self.cmds.append((node.lineno, val))
+            # os.system("./x.sh") / subprocess.run("bash ./x.sh")
             elif isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
                 self.cmds.append((node.lineno, arg0.value))
         self.generic_visit(node)
