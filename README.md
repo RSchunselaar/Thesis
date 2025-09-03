@@ -4,6 +4,12 @@ Discover **who-calls-whom** across legacy script folders (sh/bash, batch, PowerS
 
 ## Quickstart
 
+### Reproducibility (prompts & model)
+
+Each run writes `out/llm_specs.json` with the exact LLM config and the static prompt templates
+(agents + agent_mapper). This, together with `tools/export_prompts.py` (which dumps the **actual**
+prompts used during the run from SQLite), lets you include the required AI‑prompt appendix in the thesis.
+
 ```bash
 python -m venv .venv && source .venv/bin/activate # Windows: .venv\\Scripts\\activate
 pip install -e .

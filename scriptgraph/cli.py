@@ -13,6 +13,7 @@ from .graph import Graph, Edge
 from .stats_cmd import summarize_graph, summarize_runs, print_graph_stats, print_run_stats  
 from .env import load_env_file
 from .metrics import score_pair
+from datetime import datetime
 
 load_env_file()  # picks up OPENAI_API_KEY / AZURE_OPENAI_API_KEY from .env
 
@@ -38,6 +39,44 @@ def _write_outputs(out_dir: Path, g: Graph):
     (out_dir / "graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
     (out_dir / "graph.dot").write_text(g.to_dot(), encoding="utf-8")
     (out_dir / "predicted_graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
+
+def _freeze_llm_specs(out_dir: Path, cfg: Config) -> None:
+    """Write prompts and model config to out/llm_specs.json for reproducibility."""
+    from .agent_mapper import SYSTEM_PROMPT as AM_SYSTEM
+    prompts = {"agent_mapper.system": AM_SYSTEM}
+
+    # Multi-agent prompts (if present)
+    try:
+        from .agents import PLANNER_PROMPT, READER_PROMPT, MAPPER_PROMPT, WRITER_PROMPT
+        prompts.update({
+            "agents.planner": PLANNER_PROMPT,
+            "agents.reader": READER_PROMPT,
+            "agents.mapper": MAPPER_PROMPT,
+            "agents.writer": WRITER_PROMPT,
+        })
+    except Exception:
+        pass
+
+    llm_cfg = {
+        "provider": getattr(cfg.llm, "provider", "disabled"),
+        "model": getattr(cfg.llm, "model", None),
+        "openai_base": (getattr(cfg.llm, "openai", {}) or {}).get("base_url"),
+        "azure_endpoint": (getattr(cfg.llm, "azure", {}) or {}).get("endpoint"),
+        "azure_deployment": (getattr(cfg.llm, "azure", {}) or {}).get("deployment"),
+        "azure_api_version": (getattr(cfg.llm, "azure", {}) or {}).get("api_version"),
+        "temperature": getattr(cfg.llm, "temperature", None),
+        "max_tokens": getattr(cfg.llm, "max_tokens", None),
+    }
+
+    payload = {
+        "saved_at_utc": datetime.utcnow().isoformat() + "Z",
+        "egress": bool(getattr(cfg.runtime, "egress", False)),
+        "llm_config": llm_cfg,
+        "prompts": prompts,
+    }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "llm_specs.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 def cmd_score(args):
     pred = yaml.safe_load(Path(args.pred).read_text(encoding="utf-8")) or {}
@@ -131,6 +170,7 @@ def cmd_all(args):
         agent = AgentMapper(client=_llm_from_config(cfg))
         g2 = agent.map_bundle(args.folder, g)
         _write_outputs(Path(args.out), g2)
+        _freeze_llm_specs(Path(args.out), cfg)
         logger.log(
             "INFO", f"Completed scan+map; nodes={len(g2.nodes)} edges={len(g2.edges)}"
         )
@@ -156,6 +196,7 @@ def cmd_agents(args):
                              redactor=red,
                              use_llm_reader_hints=use_hints)
         g2 = runner.run(args.folder, g, args.out)
+        _freeze_llm_specs(Path(args.out), cfg)
         logger.log("INFO", f"agents {args.roles} finished; nodes={len(g2.nodes)} edges={len(g2.edges)}")
     finally:
         logger.finish()

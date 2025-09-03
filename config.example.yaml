@@ -15,7 +15,7 @@ azure:
   api_version: 2024-08-01-preview
 
 runtime:
-  egress: false # thesis default: no‑egress (enable per experiment as needed)
+  egress: true # thesis default: no‑egress (enable per experiment as needed)
   sqlite_path: ./out/runlog.sqlite
 
 privacy:
