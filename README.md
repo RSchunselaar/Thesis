@@ -11,7 +11,7 @@ pip install -e .
 scriptgraph scan data/bundles/examples/bundle1 --out out --config config.example.yaml
 scriptgraph map out/graph.yaml --out out --config config.example.yaml
 # (when you have ground truth) score predictions
-scriptgraph score --pred out/predicted_graph.yaml --truth data/bundles/examples/bundle1/truth.yaml --pred-prefix data/bundles/examples/bundle1
+scriptgraph score --pred out/predicted_graph.yaml --truth data/bundles/examples/bundle1/truth.yaml
 
 ### Seeds (planner hints)
 If a bundle contains a `seeds.txt` (one relative path per line), the Planner/2R will prioritize those files (e.g., `run.sh`, `windows/main.bat`).

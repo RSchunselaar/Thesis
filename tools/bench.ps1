@@ -16,7 +16,7 @@ foreach ($tf in $truthFiles) {
     $out = "artifacts/$($bundleName)-$r"
     scriptgraph agents $bundleDir --roles $r --out $out --config $Config | Out-Null
     $pred = "$out/predicted_graph.yaml"
-    $score = scriptgraph score --pred $pred --truth $truth --pred-prefix $bundleDir | Out-String | ConvertFrom-Json
+    $score = scriptgraph score --pred $pred --truth $truth | Out-String | ConvertFrom-Json
     $obj = @{ bundle=$bundleName; role=$r; score = $score }
     $line = $obj | ConvertTo-Json -Depth 6
     Add-Content -Path "artifacts/bench_results.jsonl" -Value $line

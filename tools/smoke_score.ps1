@@ -14,15 +14,15 @@ if (-not (Test-Path "$Out/predicted_graph.yaml")) {
 }
 
 Write-Host "== score =="
-scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth --pred-prefix $Folder
+scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth
 
 Write-Host "`n== agents 2R (Reader+Mapper only) =="
 scriptgraph agents $Folder --roles 2R --out $Out --config $Config
-scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth --pred-prefix $Folder
+scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth 
 
 Write-Host "`n== agents 4R (full pipeline) =="
 scriptgraph agents $Folder --roles 4R --out $Out --config $Config
-scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth --pred-prefix $Folder
+scriptgraph score --pred "$Out/predicted_graph.yaml" --truth $Truth
 
 Write-Host "`n== run stats =="
 scriptgraph stats runs --config $Config
