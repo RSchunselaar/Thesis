@@ -23,6 +23,11 @@ except Exception:
     HAS_AGENTS = False
 
 try:
+    from .privacy import Redactor
+except Exception:
+    Redactor = None
+
+try:
     from .llm_adapter import LLMClient, LLMConfig
     HAS_LLM = True
 except Exception:
@@ -144,7 +149,11 @@ def cmd_agents(args):
         scanner = Scanner(cfg.parsing.include_ext)
         g = scanner.scan(args.folder)
         client = llm_from_config(cfg)
-        runner = AgentRunner(args.roles, client, logger)
+        red = Redactor(cfg.privacy.redact_paths, cfg.privacy.redact_ips, cfg.privacy.redact_emails) if Redactor else None
+        runner = AgentRunner(args.roles, client, logger,
+                             log_prompts=bool(getattr(cfg.privacy, "log_prompts", False)),
+                             redactor=red,
+                             use_llm_reader_hints=False)  # keep OFF unless explicitly desired
         g2 = runner.run(args.folder, g, args.out)
         logger.log("INFO", f"agents {args.roles} finished; nodes={len(g2.nodes)} edges={len(g2.edges)}")
     finally:

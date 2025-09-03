@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS llm_calls(
   reasoning TEXT,
   FOREIGN KEY(run_id) REFERENCES runs(id)
 );
+CREATE TABLE IF NOT EXISTS llm_prompts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER NOT NULL,
+  ts TEXT NOT NULL,
+  role TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES runs(id)
+);
 CREATE TABLE IF NOT EXISTS role_latencies(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL,
@@ -113,6 +121,15 @@ class RunLogger:
                 status,
                 (reasoning or "")[:1000],
             ),
+        )
+        self.conn.commit()
+
+    def log_prompt(self, *, role: str, prompt: str):
+        """Record the exact prompt (pre-redacted upstream). Controlled by cfg.privacy.log_prompts."""
+        assert self._run_id is not None
+        self.conn.execute(
+            "INSERT INTO llm_prompts(run_id, ts, role, prompt) VALUES (?, ?, ?, ?)",
+            (self._run_id, datetime.utcnow().isoformat(), role, prompt[:4000]),
         )
         self.conn.commit()
 

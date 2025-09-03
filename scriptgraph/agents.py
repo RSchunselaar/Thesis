@@ -119,10 +119,10 @@ def _llm_plan(client: Optional[LLMClient], edges: List[Tuple[str, str]]) -> Tupl
     ordered = [s for s in wl if isinstance(s, str) and s in cand]
     return ordered, why
 
-def _llm_read_hints(client: Optional[LLMClient], src_path: str, snippet: str) -> Tuple[Dict[str, str], str]:
+def _llm_read_hints(client: Optional[LLMClient], src_path: str, snippet: str, *, redactor: Optional[Redactor] = None) -> Tuple[Dict[str, str], str, dict, str]:
     if not client or not snippet.strip():
-        return {}, ""
-    red = Redactor()
+        return {}, "", {}, ""
+    red = redactor or Redactor()
     user = json.dumps({"source": src_path, "snippet": red.redact(snippet[:4000])}, ensure_ascii=False)
     content, meta = client.chat(READER_PROMPT, user, return_meta=True)
     data = _json_load(content)
@@ -135,7 +135,7 @@ def _llm_read_hints(client: Optional[LLMClient], src_path: str, snippet: str) ->
                 if k and vv:
                     hints[k] = vv
     why = data.get("reasoning", "")
-    return hints, why
+    return hints, why, (meta or {}), user
 
 def _llm_map_targets(client: Optional[LLMClient], root: str, src: str, cmd: str, hints: Dict[str, str]) -> Tuple[List[str], str]:
     if not client:
@@ -194,6 +194,7 @@ class Planner:
             "strip_dot_slash": True,
             "var_precedence": ["export","set",".env"],  # placeholder
             "workdir": ".",
+            "llm_reader_hints": False,
         }
         # seed env hints (global)
         env_hints = {}
@@ -227,8 +228,12 @@ class Planner:
 
 
 class Reader:
-    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None):
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None,
+                 *, log_prompts: bool = False, use_llm_hints: bool = False, redactor: Optional[Redactor] = None):
         self.client = client; self.logger = logger
+        self.log_prompts = bool(log_prompts)
+        self.use_llm_hints = bool(use_llm_hints)
+        self._redactor = redactor or Redactor()
         self._rx_env_sh  = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$', re.M)
         self._rx_env_cmd = re.compile(r'^\s*set\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$', re.M)
         self._rx_call_sh = re.compile(r'(?P<kind>(?:\.|source|bash|sh)\s+)(?P<target>[^\s;]+)')
@@ -271,6 +276,24 @@ class Reader:
             elif lang=="cmd":
                 for m in self._rx_env_cmd.finditer(text):
                     env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
+            # optional LLM reader-hints (path-like vars) — conservative, opt-in        
+            if self.use_llm_hints and self.client and text.strip():
+                try:
+                    hints, why, meta, user = _llm_read_hints(self.client, rel, text, redactor=self._redactor)
+                    if hints:
+                        for k, v in hints.items():
+                            env_vars.append({"scope": rel, "name": k, "value": v, "prec": 5})  # lower precedence than explicit env
+                    if self.logger:
+                        self.logger.log_llm(role="reader", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
+                                            prompt_chars=len(user), input_tokens=meta.get("prompt_tokens"),
+                                            output_tokens=meta.get("completion_tokens"), total_tokens=meta.get("total_tokens"),
+                                            latency_ms=float(meta.get("latency_ms") or 0.0), status="ok",
+                                            src=rel, command_snippet="reader-hints", targets_count=len(hints), reasoning=(why or "")[:500])
+                        if self.log_prompts:
+                            self.logger.log_prompt(role="reader", prompt=user)
+                except Exception as ex:
+                    if self.logger:
+                        self.logger.log_llm(role="reader", status=f"error:{ex}", targets_count=0)
 
             # call sites
             if lang=="sh":
@@ -327,10 +350,12 @@ class Reader:
 
         return ObservationBatch(files=files_meta, env_vars=env_vars, call_sites=call_sites)
 
-
 class Mapper:
-    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None, use_heuristic_fallback: bool = False):
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None,
+                 use_heuristic_fallback: bool = False, *, log_prompts: bool = False, redactor: Optional[Redactor] = None):
         self.client = client; self.logger = logger; self.use_heuristic_fallback = use_heuristic_fallback
+        self.log_prompts = bool(log_prompts)
+        self._redactor = redactor or Redactor()
 
     def _env_for_src(self, obs: ObservationBatch, src: str) -> dict[str,str]:
         env: dict[str, str] = {}
@@ -386,6 +411,9 @@ class Mapper:
                                             latency_ms=float(meta.get("latency_ms") or 0.0), status="ok",
                                             src=src, command_snippet=cmd[:200],
                                             targets_count=len(targets), reasoning=why[:500])
+                        if self.log_prompts:
+                            # store pre-redacted prompt; redact if policy enabled in Redactor
+                            self.logger.log_prompt(role="mapper", prompt=self._redactor.redact(user))
                 except Exception as ex:
                     if self.logger:
                         self.logger.log_llm(role="mapper", model="", endpoint="", prompt_chars=0, latency_ms=0.0,
@@ -492,15 +520,19 @@ class Writer:
 # -------------------- Runner + Factory --------------------
 
 class AgentRunner:
-    def __init__(self, roles: str, client: LLMClient, logger: RunLogger):
+    def __init__(self, roles: str, client: LLMClient, logger: RunLogger,
+                 *, log_prompts: bool = False, redactor: Optional[Redactor] = None, use_llm_reader_hints: bool = False):
         assert roles in {"2R","4R"}
         self.roles = roles; self.client = client; self.logger = logger
+        self.log_prompts = bool(log_prompts)
+        self._redactor = redactor or Redactor()
+        self.use_llm_reader_hints = bool(use_llm_reader_hints)
 
     def run(self, root_dir: str, base_graph: Graph, out_dir: str):
         io = RoleIO(root=Path(root_dir).resolve(), graph=base_graph)
         planner = Planner(self.client, self.logger)
-        reader  = Reader(self.client, self.logger)
-        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=False)  # LLM-first
+        reader  = Reader(self.client, self.logger, log_prompts=self.log_prompts, use_llm_hints=self.use_llm_reader_hints, redactor=self._redactor)
+        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=False, log_prompts=self.log_prompts, redactor=self._redactor)  # LLM-first
         writer  = Writer(self.client, self.logger)
 
         # Budget (could come from cfg)
@@ -508,7 +540,13 @@ class AgentRunner:
 
         import time
         if self.roles == "4R":
-            t0 = time.monotonic(); manifest = planner.run(io, budget=budget); self.logger.log_role_latency("Planner", time.monotonic()-t0)
+            t0 = time.monotonic()
+            manifest = planner.run(io, budget=budget)
+            try:
+                manifest.policy["llm_reader_hints"] = bool(self.use_llm_reader_hints)
+            except Exception:
+                pass 
+            self.logger.log_role_latency("Planner", time.monotonic()-t0)
             t0 = time.monotonic(); obs      = reader.run(io, manifest);       self.logger.log_role_latency("Reader",  time.monotonic()-t0)
             t0 = time.monotonic(); snap     = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
         else:  # "2R": Reader -> Mapper only
