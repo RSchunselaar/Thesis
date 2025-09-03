@@ -1,0 +1,537 @@
+from __future__ import annotations
+import json
+import re
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable, Dict, List, Tuple, Optional
+from .logging_db import RunLogger
+from .graph import Graph, Edge
+from .scanner import Scanner
+from .llm_adapter import LLMClient, LLMConfig
+from typing import Any
+
+# Optional redactor (safe if missing)
+try:
+    from .privacy import Redactor
+except Exception:  # pragma: no cover
+    class Redactor:  # type: ignore
+        def __init__(self, *a, **k): pass
+        def redact(self, s: str) -> str: return s
+
+@dataclass
+class ReadManifest:
+    files: list[dict]                 # [{"path": "run.sh", "priority": 100, "peek": [(0, 4096)]}, ...]
+    env_hints: dict[str, str]         # seed env (global)
+    policy: dict[str, Any]            # normalization policy
+    budget: dict[str, int]            # {"max_tool_calls": 50, "max_latency_ms": 60000}
+
+@dataclass
+class ObservationBatch:
+    files: list[dict]                 # [{"path":"run.sh","lang":"sh","size":1234,"hash":""}]
+    env_vars: list[dict]              # [{"scope":"run.sh","name":"UTILS","value":"./utils","prec":10}]
+    call_sites: list[dict]            # [{"src":"run.sh","raw":"${UTILS}/cleanup.sh","kind":"source","line":12,"col":3,"span":[120,155],"dynamic":1,"conf":0.7}]
+
+@dataclass
+class GraphSnapshot:
+    graph: Graph
+    unresolved: list[dict]            # [{"src":"x","raw":"y","reason":"..."}]
+    coverage: dict[str, Any]          # {"touched": n, "total": m}
+
+# -------------------- Prompts --------------------
+
+PLANNER_PROMPT = (
+    "ROLE: Planner (orchestrator & budgeter)\n"
+    "OBJECTIVE: Choose the best order of SOURCE FILES to process so we reach a complete dependency graph with "
+    "minimal tool calls/latency.\n"
+    "INPUT: A JSON object {\"unresolved\": [{\"src\":\"<path>\", \"command\":\"<raw cmd>\"}, ...]}\n"
+    "CONSTRAINTS:\n"
+    " - Prefer sources whose commands have concrete paths and few variables.\n"
+    " - De-prioritize sources whose commands are very dynamic (many ${VAR}, $VAR, %VAR%).\n"
+    " - Be conservative—if uncertain, include fewer items rather than more.\n"
+    "OUTPUT (STRICT JSON): {\"worklist\":[\"<src1>\", \"<src2>\", ...], \"reasoning\":\"<why>\"}\n"
+    "NOTES: Only return 'worklist' and 'reasoning'. No extra keys, no prose outside JSON.\n"
+)
+
+READER_PROMPT = (
+    "ROLE: Reader (evidence collector)\n"
+    "OBJECTIVE: From the given script SNIPPET, infer path-relevant variables/aliases for dependency resolution.\n"
+    "FOCUS: Only variables that influence file paths (e.g., UTILS=./utils, SCRIPTS=../bin). Ignore unrelated values.\n"
+    "FORMAT RESTRICTIONS: Values must match [A-Za-z0-9_./-].\n"
+    "OUTPUT (STRICT JSON): {\"hints\": {\"VAR\":\"value\", ...}, \"reasoning\":\"<why>\"}\n"
+    "BE CONSERVATIVE: If unsure, leave 'hints' empty. Never invent paths or variables.\n"
+)
+
+MAPPER_PROMPT = (
+    "ROLE: Mapper (resolver & graph builder)\n"
+    "OBJECTIVE: Resolve the target script path(s) for a given command line, relative to the project root.\n"
+    "YOU RECEIVE (as user JSON): {\"root\":\"<root>\", \"src\":\"<src file>\", \"command\":\"<cmd line>\", \"hints\": {VAR: value, ...}, \"allowed_paths\":[\"...\" (optional)]}\n"
+    "RESOLUTION RULES:\n"
+    " - Apply variable expansion (${VAR}, $VAR, %VAR%) using provided 'hints'.\n"
+    " - Normalize slashes to '/'; strip leading './' when possible; return paths relative to 'root'.\n"
+    " - Consider only plausible script files (.sh,.bash,.ksh,.bat,.cmd,.ps1,.pl,.py).\n"
+    " - IF 'allowed_paths' is provided, choose only from that list; otherwise be conservative.\n"
+    "OUTPUT (STRICT JSON): {\"targets\":[\"relative/path\", ...], \"reasoning\":\"<brief why>\"}\n"
+    "FAIL SAFE: If uncertain, return an empty 'targets' list (do not guess).\n"
+)
+
+WRITER_PROMPT = (
+    "ROLE: Writer (validator & exporter — human summary)\n"
+    "OBJECTIVE: Given a small JSON summary (nodes/edges/unresolved counts), write 5–8 crisp bullets for a run report.\n"
+    "STYLE: No intro/outro; just bullets. Mention unresolved/dynamic edges if any and next best actions.\n"
+    "OUTPUT: Plain text bullets (one per line, starting with '- ').\n"
+)
+
+# -------------------- Utilities --------------------
+
+SAFE_VAL = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+def _json_load(s: str) -> dict:
+    try:
+        return json.loads(s)
+    except Exception:
+        return {}
+
+def _clean_val(v: str) -> Optional[str]:
+    v = (v or "").strip().strip('"').strip("'")
+    return v if SAFE_VAL.match(v) else None
+
+def _norm_path(p: str) -> str:
+    p = (p or "").strip().strip('"').strip("'").replace("\\", "/")
+    if p.startswith("./"): p = p[2:]
+    while "//" in p: p = p.replace("//", "/")
+    return p
+
+# -------------------- LLM wrappers --------------------
+
+def _llm_plan(client: Optional[LLMClient], edges: List[Tuple[str, str]]) -> Tuple[List[str], str]:
+    if not client or not edges:
+        return [], ""
+    # Trim to a small prompt
+    items = [{"src": s, "command": c} for s, c in edges[:40]]
+    user = json.dumps({"unresolved": items}, ensure_ascii=False)
+    data = _json_load(client.chat(PLANNER_PROMPT, user))
+    wl = data.get("worklist") or []
+    why = data.get("reasoning", "")
+    # Keep only sources that actually exist in the candidate set
+    cand = {s for s, _ in edges}
+    ordered = [s for s in wl if isinstance(s, str) and s in cand]
+    return ordered, why
+
+def _llm_read_hints(client: Optional[LLMClient], src_path: str, snippet: str) -> Tuple[Dict[str, str], str]:
+    if not client or not snippet.strip():
+        return {}, ""
+    red = Redactor()
+    user = json.dumps({"source": src_path, "snippet": red.redact(snippet[:4000])}, ensure_ascii=False)
+    data = _json_load(client.chat(READER_PROMPT, user))
+    hints = {}
+    d = data.get("hints") or {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if isinstance(k, str) and isinstance(v, str):
+                vv = _clean_val(v)
+                if k and vv:
+                    hints[k] = vv
+    why = data.get("reasoning", "")
+    return hints, why
+
+def _llm_map_targets(client: Optional[LLMClient], root: str, src: str, cmd: str, hints: Dict[str, str]) -> Tuple[List[str], str]:
+    if not client:
+        return [], ""
+    user = json.dumps({"root": root, "src": src, "command": cmd, "hints": hints}, ensure_ascii=False)
+    data = _json_load(client.chat(MAPPER_PROMPT, user))
+    out = []
+    for t in data.get("targets", []) or []:
+        if isinstance(t, str):
+            out.append(_norm_path(t))
+    why = data.get("reasoning", "")
+    return out, why
+
+# -------------------- Roles --------------------
+
+@dataclass
+class RoleIO:
+    root: Path
+    graph: Graph
+
+class Planner:
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None):
+        self.client = client; self.logger = logger
+
+    def _lang(self, p: str) -> str:
+        px = p.lower()
+        if px.endswith((".sh",".bash",".ksh")): return "sh"
+        if px.endswith((".bat",".cmd")): return "cmd"
+        if px.endswith(".ps1"): return "ps1"
+        if px.endswith(".py"): return "py"
+        if px.endswith(".pl"): return "pl"
+        return "other"
+
+    def _light_crawl(self, root: Path) -> list[str]:
+        paths = []
+        for ext in (".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py"):
+            for p in root.rglob(f"*{ext}"):
+                try:
+                    rel = p.relative_to(root).as_posix()
+                    paths.append(rel)
+                except Exception:
+                    pass
+        return sorted(set(paths))
+
+    def run(self, io: RoleIO, budget: dict | None = None) -> ReadManifest:
+        root = io.root
+        files = self._light_crawl(root)
+        # entrypoints first
+        prio = {}
+        for f in files:
+            base = f.rsplit("/",1)[-1].lower()
+            prio[f] = 100 if base in {"run.sh","main.bat","start.cmd"} else 10
+        # normalization policy (simple, extend later)
+        policy = {
+            "canon_slashes": True,
+            "strip_dot_slash": True,
+            "var_precedence": ["export","set",".env"],  # placeholder
+            "workdir": ".",
+        }
+        # seed env hints (global)
+        env_hints = {}
+        # budget defaults (can pass from config later)
+        budget = budget or {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1}
+
+        # build manifest
+        manifest = ReadManifest(
+            files=[{"path": f, "priority": prio[f], "peek": [(0, 4096)]} for f in files],
+            env_hints=env_hints,
+            policy=policy,
+            budget=budget,
+        )
+        if self.logger:
+            self.logger.log("INFO", f"Planner: indexed {len(manifest.files)} files; budget={manifest.budget}")
+
+        # write to SQLite memory
+        if self.logger and self.logger.run_id is not None:
+            c = self.logger.conn
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS plan_files(run_id INT, path TEXT, priority INT);
+            CREATE TABLE IF NOT EXISTS plan_params(run_id INT, key TEXT, value TEXT);
+            """)
+            c.executemany("INSERT INTO plan_files VALUES (?,?,?)",
+                          [(self.logger.run_id, it["path"], it["priority"]) for it in manifest.files])
+            for k,v in (policy|{"budget":json.dumps(budget)}).items():
+                c.execute("INSERT INTO plan_params VALUES (?,?,?)", (self.logger.run_id, k, json.dumps(v) if not isinstance(v,str) else v))
+            c.commit()
+
+        return manifest
+
+
+class Reader:
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None):
+        self.client = client; self.logger = logger
+        self._rx_env_sh  = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$', re.M)
+        self._rx_env_cmd = re.compile(r'^\s*set\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$', re.M)
+        self._rx_call_sh = re.compile(r'(?P<kind>(?:\.|source|bash|sh)\s+)(?P<target>[^\s;]+)')
+        self._rx_call_cmd = re.compile(r'\b(?P<kind>call|start)\s+(?P<target>[^\s&]+)', re.I)
+        self._rx_call_ps1 = re.compile(r'(?:(?:^|\s)\.\s+(?P<dot>[^\s]+)|(?:^|\s)&\s*(?P<amp>[^\s]+))')
+
+    def _lang(self, p: str) -> str:
+        p=p.lower()
+        if p.endswith((".sh",".bash",".ksh")): return "sh"
+        if p.endswith((".bat",".cmd")): return "cmd"
+        if p.endswith(".ps1"): return "ps1"
+        if p.endswith(".py"): return "py"
+        if p.endswith(".pl"): return "pl"
+        return "other"
+
+        # add helper inside Reader:
+    def _plausible_target(self, tok: str) -> bool:
+        t = tok.strip().strip('"').strip("'")
+        return ("/" in t or "\\" in t or t.lower().endswith((".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py")))
+
+    def run(self, io: RoleIO, manifest: ReadManifest) -> ObservationBatch:
+        files_meta, env_vars, call_sites = [], [], []
+        total = len(manifest.files)
+        for i, it in enumerate(sorted(manifest.files, key=lambda x: -x["priority"])):
+            rel = it["path"]; path = io.root / rel
+            lang = self._lang(rel)
+            try:
+                peek = it.get("peek", [(0,4096)])[0]
+                data = path.read_bytes()[peek[0]:peek[1]]
+                text = data.decode("utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            files_meta.append({"path": rel, "lang": lang, "size": path.stat().st_size if path.exists() else 0, "hash": ""})
+            if self.logger and (i % 10 == 0 or i == total):
+                self.logger.log("INFO", f"Reader: {i}/{total} files peeked")
+            # env vars
+            if lang=="sh":
+                for m in self._rx_env_sh.finditer(text):
+                    env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
+            elif lang=="cmd":
+                for m in self._rx_env_cmd.finditer(text):
+                    env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
+
+            # call sites
+            if lang=="sh":
+                for m in self._rx_call_sh.finditer(text):
+                    full = m.group(0).strip()
+                    tgt  = m.group("target")
+                    if not self._plausible_target(tgt):   # <- skip 'utils'
+                        continue
+                    kraw = m.group("kind").strip()
+                    kind = "source" if kraw.startswith((".","source")) else "call"
+                    call_sites.append({
+                        "src": rel, "raw": tgt, "cmd": full, "kind": kind,
+                        "line": 0, "col": 0, "span": [0,0],
+                        "dynamic": 1 if ("$" in tgt or "${" in tgt) else 0, "conf": 0.7
+                    })
+            elif lang=="cmd":
+                for m in self._rx_call_cmd.finditer(text):
+                    full = m.group(0).strip()
+                    tgt  = m.group("target")
+                    if not self._plausible_target(tgt):
+                        continue
+                    call_sites.append({
+                        "src": rel, "raw": tgt, "cmd": full, "kind": "call",
+                        "line": 0, "col": 0, "span": [0,0],
+                        "dynamic": 1 if "%" in tgt else 0, "conf": 0.7
+                    })
+            elif lang=="ps1":
+                for m in self._rx_call_ps1.finditer(text):
+                    full = m.group(0).strip()
+                    tgt  = m.group("dot") or m.group("amp")
+                    if not self._plausible_target(tgt):
+                        continue
+                    call_sites.append({
+                        "src": rel, "raw": tgt, "cmd": full,
+                        "kind": "source" if m.group("dot") else "call",
+                        "line": 0, "col": 0, "span": [0,0],
+                        "dynamic": 0, "conf": 0.7
+                    })
+        # Write to SQLite
+        if self.logger and self.logger.run_id is not None:
+            c = self.logger.conn
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS files(run_id INT, path TEXT, lang TEXT, size INT, hash TEXT);
+            CREATE TABLE IF NOT EXISTS env_vars(run_id INT, scope_path TEXT, name TEXT, value TEXT, precedence INT);
+            CREATE TABLE IF NOT EXISTS call_sites(run_id INT, src TEXT, raw_target TEXT, kind TEXT, line INT, col INT, span_start INT, span_end INT, dynamic_flag INT, confidence REAL);
+            """)
+            c.executemany("INSERT INTO files VALUES (?,?,?,?,?)",
+                          [(self.logger.run_id, f["path"], f["lang"], f["size"], f["hash"]) for f in files_meta])
+            c.executemany("INSERT INTO env_vars VALUES (?,?,?,?,?)",
+                          [(self.logger.run_id, v["scope"], v["name"], v["value"], v["prec"]) for v in env_vars])
+            c.executemany("INSERT INTO call_sites VALUES (?,?,?,?,?,?,?,?,?,?)",
+                          [(self.logger.run_id, cs["src"], cs["raw"], cs["kind"], cs["line"], cs["col"], cs["span"][0], cs["span"][1], cs["dynamic"], cs["conf"]) for cs in call_sites])
+            c.commit()
+
+        return ObservationBatch(files=files_meta, env_vars=env_vars, call_sites=call_sites)
+
+
+class Mapper:
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None, use_heuristic_fallback: bool = False):
+        self.client = client; self.logger = logger; self.use_heuristic_fallback = use_heuristic_fallback
+
+    def _env_for_src(self, obs: ObservationBatch, src: str) -> dict[str,str]:
+        env: dict[str, str] = {}
+        for v in obs.env_vars:
+            if v["scope"] == src:
+                env[v["name"]] = v["value"]
+        return env
+
+    def _subst(self, s: str, env: dict[str,str]) -> str:
+        out = s
+        for k,v in env.items():
+            out = out.replace(f"${{{k}}}", v).replace(f"${k}", v).replace(f"%{k}%", v)
+        return _norm_path(out)
+
+    def run(self, io: RoleIO, obs: ObservationBatch, policy: dict) -> GraphSnapshot:
+        g = Graph()
+        unresolved: list[dict] = []
+
+        # seed nodes with discovered files
+        for f in obs.files: g.add_node(f["path"])
+
+        # Allowed list for LLM prompt + Python-side guard
+        allowed_set = {f["path"] for f in obs.files}
+        allowed_list = sorted(allowed_set)  # JSON-serializable
+
+        seen: set[tuple[str, str, str]] = set()
+        resolved = 0
+        nonresolved = 0
+        total = len(obs.call_sites)
+
+        for idx, cs in enumerate(obs.call_sites, 1):
+            src = cs["src"]; raw = cs["raw"]; kind = cs["kind"]
+            cmd = cs.get("cmd") or f"{kind} {raw}"
+            env = self._env_for_src(obs, src)
+
+            # LLM first
+            targets: list[str] = []
+            why = ""
+            if self.client:
+                user = json.dumps({"root": str(io.root), "src": src, "command": cmd, "hints": env, "allowed_paths": allowed_list}, ensure_ascii=False)
+                try:
+                    content, meta = self.client.chat(MAPPER_PROMPT, user, return_meta=True)
+                    data = _json_load(content or "{}")
+                    cand = data.get("targets") or []
+                    if isinstance(cand, list):
+                        targets = [_norm_path(t) for t in cand if isinstance(t, str)]
+                        targets = [t for t in targets if t in allowed_set]
+                    why = (data.get("reasoning") or "").strip()
+                    if self.logger:
+                        self.logger.log_llm(role="mapper", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
+                                            prompt_chars=len(user), input_tokens=meta.get("prompt_tokens"),
+                                            output_tokens=meta.get("completion_tokens"), total_tokens=meta.get("total_tokens"),
+                                            latency_ms=float(meta.get("latency_ms") or 0.0), status="ok",
+                                            src=src, command_snippet=cmd[:200],
+                                            targets_count=len(targets), reasoning=why[:500])
+                except Exception as ex:
+                    if self.logger:
+                        self.logger.log_llm(role="mapper", model="", endpoint="", prompt_chars=0, latency_ms=0.0,
+                                            status=f"error:{ex}", src=src, command_snippet=cmd[:200], targets_count=0)
+
+            # Optional heuristic fallback
+            if not targets and self.use_heuristic_fallback:
+                t = self._subst(raw, env)
+                if t != _norm_path(raw) and t in allowed_set:
+                    targets = [t]
+                    why = "local var substitution"
+
+            if targets:
+                resolved += 1
+                for t in targets:
+                    key = (src, t, kind)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    g.add_edge(Edge(src=src, dst=t, kind=kind, command=cmd,
+                                    dynamic=bool(cs.get("dynamic", 0)), resolved=True, confidence=0.7, reason=why or None))
+            else:
+                nonresolved += 1
+                g.add_node(src)
+                unresolved.append({"src": src, "raw_target": raw, "reason": "no-targets-from-LLM"})
+            if self.logger and (idx % 10 == 0 or idx == total):
+                self.logger.log("INFO", f"Mapper: processed {idx}/{total}; "
+                                f"resolved={resolved} unresolved={nonresolved}")
+        # write coverage + indices
+        coverage = {"touched": len({cs["src"] for cs in obs.call_sites}), "total": len(obs.files)}
+        if self.logger and self.logger.run_id is not None:
+            c = self.logger.conn
+            c.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS nodes_idx(run_id INT, path TEXT);
+                CREATE TABLE IF NOT EXISTS edges_idx(run_id INT, src TEXT, dst TEXT, kind TEXT, resolved INT, dynamic INT, confidence REAL);
+                CREATE TABLE IF NOT EXISTS unresolved(run_id INT, src TEXT, raw_target TEXT, reason TEXT);
+                CREATE TABLE IF NOT EXISTS coverage_stats(run_id INT, stats_json TEXT);
+                """
+            )
+            c.executemany("INSERT INTO nodes_idx VALUES (?,?)", [(self.logger.run_id, n) for n in sorted(g.nodes.keys())])
+            c.executemany("INSERT INTO edges_idx VALUES (?,?,?,?,?,?,?)",
+                          [(self.logger.run_id, e.src, e.dst, e.kind, int(e.resolved), int(e.dynamic), float(e.confidence)) for e in g.edges])
+            c.executemany("INSERT INTO unresolved VALUES (?,?,?,?)",
+                          [(self.logger.run_id, u["src"], u["raw_target"], u["reason"]) for u in unresolved])
+            c.execute("INSERT INTO coverage_stats VALUES (?,?)", (self.logger.run_id, json.dumps(coverage)))
+            c.commit()
+
+        return GraphSnapshot(graph=g, unresolved=unresolved, coverage=coverage)
+
+class Writer:
+    def __init__(self, client: Optional[LLMClient] = None, logger: Optional[RunLogger] = None):
+        self.client = client; self.logger = logger
+
+    def _validate(self, g: Graph) -> list[str]:
+        errs = []
+        nodes = set(g.nodes.keys())
+        for e in g.edges:
+            if e.src not in nodes: errs.append(f"edge src not in nodes: {e.src}")
+            if e.dst not in nodes: errs.append(f"edge dst not in nodes: {e.dst}")
+        return errs
+
+    def run(self, io: RoleIO, out_dir: Path, snap: GraphSnapshot):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        errs = self._validate(snap.graph)
+        if errs and self.logger:
+            for m in errs: self.logger.log("WARN", m)
+
+        # Artifacts
+        predicted = out_dir / "predicted_graph.yaml"
+        dotfile   = out_dir / "graph.dot"
+        pngfile   = out_dir / "graph.png"  # optional if you have dot
+        report    = out_dir / "run_report.json"
+
+        predicted.write_text(snap.graph.to_yaml(), encoding="utf-8")
+        dotfile.write_text(snap.graph.to_dot(), encoding="utf-8")
+        report.write_text(json.dumps({
+            "coverage": snap.coverage,
+            "unresolved": snap.unresolved[:50],
+        }, indent=2), encoding="utf-8")
+
+        if self.logger and self.logger.run_id is not None:
+            c = self.logger.conn
+            c.executescript("""CREATE TABLE IF NOT EXISTS artifacts(run_id INT, predicted_graph_path TEXT, report_path TEXT);""")
+            c.execute("INSERT INTO artifacts VALUES (?,?,?)", (self.logger.run_id, str(predicted), str(report)))
+            self.logger.log("INFO", f"Artifacts: {predicted} ; {report}")
+            c.commit()
+
+        # Optional human bullets via LLM
+        if self.client:
+            summary = {"nodes": len(snap.graph.nodes), "edges": len(snap.graph.edges),
+                       "dynamic_unresolved": sum(1 for e in snap.graph.edges if e.dynamic and not e.resolved)}
+            try:
+                content, meta = self.client.chat(WRITER_PROMPT, json.dumps(summary), return_meta=True)
+                (out_dir / "report.md").write_text(content.strip(), encoding="utf-8")
+                self.logger and self.logger.log_llm(role="writer", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
+                                                    prompt_chars=len(str(summary)), input_tokens=meta.get("prompt_tokens"),
+                                                    output_tokens=meta.get("completion_tokens"), total_tokens=meta.get("total_tokens"),
+                                                    latency_ms=float(meta.get("latency_ms") or 0.0), status="ok", targets_count=0)
+            except Exception as ex:
+                self.logger and self.logger.log_llm(role="writer", model="", endpoint="", prompt_chars=0, latency_ms=0.0, status=f"error:{ex}", targets_count=0)
+
+
+# -------------------- Runner + Factory --------------------
+
+class AgentRunner:
+    def __init__(self, roles: str, client: LLMClient, logger: RunLogger):
+        assert roles in {"2R","4R"}
+        self.roles = roles; self.client = client; self.logger = logger
+
+    def run(self, root_dir: str, base_graph: Graph, out_dir: str):
+        io = RoleIO(root=Path(root_dir).resolve(), graph=base_graph)
+        planner = Planner(self.client, self.logger)
+        reader  = Reader(self.client, self.logger)
+        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=False)  # LLM-first
+        writer  = Writer(self.client, self.logger)
+
+        # Budget (could come from cfg)
+        budget = {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1}
+
+        manifest = planner.run(io, budget=budget)
+        obs      = reader.run(io, manifest)
+        snap     = mapper.run(io, obs, manifest.policy)
+
+        # Optional extra loop if many unresolved (bounded)
+        if snap.unresolved and budget["max_loops"] > 0:
+            budget["max_loops"] -= 1
+            # Promote unresolved sources for a deeper peek
+            promote = {u["src"] for u in snap.unresolved}
+            for it in manifest.files:
+                if it["path"] in promote:
+                    it["peek"] = [(0, 8192)]  # read twice as much
+                    it["priority"] = 200
+            obs2  = reader.run(io, manifest)
+            snap  = mapper.run(io, obs2, manifest.policy)
+
+        outp = Path(out_dir)
+        writer.run(io, outp, snap)
+        return snap.graph
+
+
+def llm_from_config(cfg) -> LLMClient:
+    if cfg.llm.provider == "openai":
+        return LLMClient(LLMConfig(provider="openai", model=cfg.llm.model or "gpt-5-mini"))
+    if cfg.llm.provider == "azure":
+        az = cfg.llm.azure or {}
+        return LLMClient(LLMConfig(provider="azure", model=None,
+                                   azure_endpoint=az.get("endpoint"),
+                                   azure_deployment=az.get("deployment"),
+                                   azure_api_version=az.get("api_version", "2025-08-01-preview")))
+    return LLMClient(LLMConfig(provider="disabled"))

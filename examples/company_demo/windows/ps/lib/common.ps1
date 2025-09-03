@@ -1,0 +1,1 @@
+function Say-Hello { Write-Host "hello" }

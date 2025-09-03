@@ -1,0 +1,25 @@
+llm:
+  provider: openai # disabled | openai | azure
+  model: gpt-5-mini # for openai provider
+# temperature: 0.0
+# OpenAI settings (used when provider: openai)
+openai:
+  base_url: https://api.openai.com
+# Azure OpenAI settings (used when provider: azure)
+azure:
+  endpoint: https://YOUR-RESOURCE.openai.azure.com
+  deployment: gpt-4o-mini
+  api_version: 2024-08-01-preview
+
+runtime:
+  egress: true # set true to allow external API calls
+  sqlite_path: ./out/runlog.sqlite
+
+privacy:
+  log_prompts: true # true to store prompts/responses in SQLite
+  redact_paths: false
+  redact_ips: false
+  redact_emails: false
+
+parsing:
+  include_ext: [".sh", ".bash", ".ksh", ".bat", ".cmd", ".ps1", ".pl", ".py"]

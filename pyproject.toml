@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scriptgraph"
+version = "0.1.0"
+description = "MVP: dependency graph discovery for legacy script collections"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "You"}]
+dependencies = [
+  "PyYAML>=6.0",
+  "requests>=2.31",   # OK if you applied the external LLM patch; harmless otherwise
+]
+
+[project.scripts]
+scriptgraph = "scriptgraph.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scriptgraph*"]
+exclude = ["tests*", "examples*", "out*", "build*", "dist*", "*.egg-info*"]

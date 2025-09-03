@@ -1,0 +1,148 @@
+{
+  "coverage": {
+    "touched": 14,
+    "total": 30
+  },
+  "unresolved": [
+    {
+      "src": "node_modules/.bin/acorn.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/acorn.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/cssesc.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/cssesc.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/esbuild.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/esbuild.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/eslint-config-prettier.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/eslint-config-prettier.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/eslint.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/eslint.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/js-yaml.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/js-yaml.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/nanoid.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/nanoid.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/node-which.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/node-which.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/parser.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/parser.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/prettier.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/prettier.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/rimraf.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/rimraf.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/rollup.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/rollup.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/semver.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/semver.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/vite.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    },
+    {
+      "src": "node_modules/.bin/vite.ps1",
+      "raw_target": "\"$basedir/node$exe\"",
+      "reason": "no-targets-from-LLM"
+    }
+  ]
+}

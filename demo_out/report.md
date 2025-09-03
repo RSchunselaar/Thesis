@@ -1,0 +1,6 @@
+- 30 nodes discovered in the dataset — a reasonable initial topology to work from.
+- 0 edges detected — no relationships were inferred or extracted during this run.
+- 0 dynamic_unresolved — there are no unresolved dynamic relationships to address.
+- Next action: enable or run edge/relationship extraction (rule-based parsers or ML inference) to populate links between the 30 nodes.
+- Also validate node quality (dedupe, canonical IDs, metadata completeness) to improve edge-detection accuracy.
+- If relationships were expected, check ingestion/connector logs and re-run with relationship extraction enabled or perform semi-automated/manual linking as needed.
