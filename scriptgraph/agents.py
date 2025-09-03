@@ -414,6 +414,13 @@ class Mapper:
             cmd = cs.get("cmd") or f"{kind} {raw}"
             env = self._env_for_src(obs, src)
 
+            # --- IMPORTANT: skip static call-sites ---
+            # Static (non-dynamic) edges were already captured by the Scanner and
+            # carried over above. Avoid re-adding them here to prevent duplicates.
+            if not cs.get("dynamic", 0):
+                g.add_node(src)  # keep node coverage consistent
+                continue
+
             # LLM first
             targets: list[str] = []
             why = ""
