@@ -5,24 +5,20 @@ import hashlib
 import io
 import yaml
 
-
 @dataclass
 class RuntimeCfg:
     egress: bool = False
     sqlite_path: str = "./out/runlog.sqlite"
 
-
 @dataclass
 class LlmCfg:
-    # providers: disabled | local | openai | azure
+    # providers: disabled | local | openai
     provider: str = "disabled"
     model: str = ""
     model_path: str = ""  # for local models later
     openai: Dict[str, Any] = field(default_factory=dict)
-    azure: Dict[str, Any] = field(default_factory=dict)
     temperature: float | None = None
     max_tokens: int | None = None
-
 
 @dataclass
 class PrivacyCfg:

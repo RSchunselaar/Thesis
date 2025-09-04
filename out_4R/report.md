@@ -1,6 +1,0 @@
-- Graph contains 15 nodes and 7 edges — overall very sparse (average degree < 1).  
-- Low edge count suggests many isolated or weakly connected entities; expect multiple disconnected components.  
-- No dynamic/unresolved edges reported (dynamic_unresolved = 0), so there are currently no pending link resolutions.  
-- Possible causes: incomplete ingestion, conservative matching/linking rules, or missing relationship data.  
-- Recommended immediate checks: run a connectivity component analysis and list isolated nodes to prioritize investigation.  
-- Next actions: run link-discovery/enrichment (entity resolution, similarity/link prediction) and re-ingest or relax matching thresholds for suspected missing links.

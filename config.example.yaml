@@ -1,5 +1,5 @@
 llm:
-  provider: openai # disabled | openai | azure
+  provider: openai # disabled | openai
   model: gpt-5-mini # for openai provider
   # For GPT‑5 family keep provider defaults; do not set temperature unless using non‑GPT‑5 models.
   # temperature: 0.0
@@ -8,11 +8,6 @@ llm:
 # OpenAI settings (used when provider: openai)
 openai:
   base_url: https://api.openai.com
-# Azure OpenAI settings (used when provider: azure)
-azure:
-  endpoint: https://YOUR-RESOURCE.openai.azure.com
-  deployment: gpt-4o-mini
-  api_version: 2024-08-01-preview
 
 runtime:
   egress: true # thesis default: no‑egress (enable per experiment as needed)

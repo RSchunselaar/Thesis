@@ -15,7 +15,7 @@ from .env import load_env_file
 from .metrics import score_pair
 from datetime import datetime
 
-load_env_file()  # picks up OPENAI_API_KEY / AZURE_OPENAI_API_KEY from .env
+load_env_file()  # picks up OPENAI_API_KEY
 
 try:
     from .agents import AgentRunner, llm_from_config
@@ -61,9 +61,6 @@ def _freeze_llm_specs(out_dir: Path, cfg: Config) -> None:
         "provider": getattr(cfg.llm, "provider", "disabled"),
         "model": getattr(cfg.llm, "model", None),
         "openai_base": (getattr(cfg.llm, "openai", {}) or {}).get("base_url"),
-        "azure_endpoint": (getattr(cfg.llm, "azure", {}) or {}).get("endpoint"),
-        "azure_deployment": (getattr(cfg.llm, "azure", {}) or {}).get("deployment"),
-        "azure_api_version": (getattr(cfg.llm, "azure", {}) or {}).get("api_version"),
         "temperature": getattr(cfg.llm, "temperature", None),
         "max_tokens": getattr(cfg.llm, "max_tokens", None),
     }
@@ -93,17 +90,6 @@ def _llm_from_config(cfg):
             provider="openai",
             model=getattr(cfg.llm, "model", "") or "gpt-5-mini",
             openai_base=(getattr(cfg.llm, "openai", {}) or {}).get("base_url", "https://api.openai.com"),
-            temperature=getattr(cfg.llm, "temperature", None),
-            max_tokens=getattr(cfg.llm, "max_tokens", None),
-        ))
-    if prov == "azure":
-        az = getattr(cfg.llm, "azure", {}) or {}
-        return LLMClient(LLMConfig(
-            provider="azure",
-            model=None,
-            azure_endpoint=az.get("endpoint"),
-            azure_deployment=az.get("deployment"),
-            azure_api_version=az.get("api_version", "2025-08-01-preview"),
             temperature=getattr(cfg.llm, "temperature", None),
             max_tokens=getattr(cfg.llm, "max_tokens", None),
         ))

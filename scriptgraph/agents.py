@@ -619,10 +619,4 @@ class AgentRunner:
 def llm_from_config(cfg) -> LLMClient:
     if cfg.llm.provider == "openai":
         return LLMClient(LLMConfig(provider="openai", model=cfg.llm.model or "gpt-5-mini"))
-    if cfg.llm.provider == "azure":
-        az = cfg.llm.azure or {}
-        return LLMClient(LLMConfig(provider="azure", model=None,
-                                   azure_endpoint=az.get("endpoint"),
-                                   azure_deployment=az.get("deployment"),
-                                   azure_api_version=az.get("api_version", "2025-08-01-preview")))
     return LLMClient(LLMConfig(provider="disabled"))
