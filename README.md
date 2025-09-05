@@ -24,4 +24,21 @@ If a bundle contains a `seeds.txt` (one relative path per line), the Planner/2R 
 
 ### Bench summary table
 py tools\\bench_table.py artifacts\\bench_results.jsonl > artifacts\\bench_table.md
+
+### Generate Statistical method statistics
+py tools\bench_stats.py artifacts\bench_results.jsonl `
+  --metric f1_edges `
+  --out artifacts\bench_stats_f1_edges.md `
+  --csv artifacts\per_bundle_f1_edges.csv `
+  --boot 20000 --alpha 0.05 --seed 42
+py tools\bench_stats.py artifacts\bench_results.jsonl `
+  --metric f1_nodes `
+  --out artifacts\bench_stats_f1_nodes.md `
+  --csv artifacts\per_bundle_f1_nodes.csv `
+  --boot 20000 --alpha 0.05 --seed 42
+py tools\bench_stats.py artifacts\bench_results.jsonl `
+  --metric gcr `
+  --out artifacts\bench_stats_gcr.md `
+  --csv artifacts\per_bundle_gcr.csv `
+  --boot 20000 --alpha 0.05 --seed 42
 ```

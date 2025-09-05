@@ -1,38 +1,4 @@
 #!/usr/bin/env python
-"""
-bench_stats.py — statistical comparisons of ScriptGraph systems (Static / 2R / 4R)
-
-Input  : JSONL produced by tools/bench.ps1   (one JSON object per line)
-Output : Markdown (or plain text) report with paired tests & effect sizes
-
-Each JSON line is expected to look like:
-  {"bundle":"bundle1","role":"2R","score":{"f1_nodes":1.0,"f1_edges":1.0,"gcr":1,...}}
-
-Usage:
-py tools\bench_stats.py artifacts\bench_results.jsonl `
-  --metric f1_edges `
-  --out artifacts\bench_stats_f1_edges.md `
-  --csv artifacts\per_bundle_f1_edges.csv `
-  --boot 20000 --alpha 0.05 --seed 42
-py tools\bench_stats.py artifacts\bench_results.jsonl `
-  --metric f1_nodes `
-  --out artifacts\bench_stats_f1_nodes.md `
-  --csv artifacts\per_bundle_f1_nodes.csv `
-  --boot 20000 --alpha 0.05 --seed 42
-py tools\bench_stats.py artifacts\bench_results.jsonl `
-  --metric gcr `
-  --out artifacts\bench_stats_gcr.md `
-  --csv artifacts\per_bundle_gcr.csv `
-  --boot 20000 --alpha 0.05 --seed 42
-
-Notes:
-- Works with any set of roles present in the file (e.g., just 2R and 4R).
-- Uses paired tests on per-bundle scores (only bundles present in both systems are compared).
-- Reports: paired t-test (two-sided), Wilcoxon signed-rank (two-sided), Holm-Bonferroni adjusted p,
-  Cohen's dz (paired), rank-biserial correlation (paired; = (wins - losses)/non-ties),
-  bootstrap 95% CI for mean difference, and win-rate (B > A).
-- ASCII-only output (safe for Windows cp1252 terminals).
-"""
 from __future__ import annotations
 
 import argparse

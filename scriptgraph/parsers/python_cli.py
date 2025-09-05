@@ -4,7 +4,7 @@ from pathlib import Path
 from ..graph import Edge
 
 
-SHELL_EXTS = {".sh", ".bash", ".ksh", ".cmd", ".bat", ".ps1"}
+SHELL_EXTS = {".sh", ".bash", ".ksh", ".cmd", ".bat", ".ps1", ".py"}
 
 
 class CallVisitor(ast.NodeVisitor):

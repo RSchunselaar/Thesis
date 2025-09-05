@@ -65,12 +65,15 @@ READER_PROMPT = (
 MAPPER_PROMPT = (
     "ROLE: Mapper (resolver & graph builder)\n"
     "OBJECTIVE: Resolve the target script path(s) for a given command line, relative to the project root.\n"
-    "YOU RECEIVE (as user JSON): {\"root\":\"<root>\", \"src\":\"<src file>\", \"command\":\"<cmd line>\", \"hints\": {VAR: value, ...}, \"allowed_paths\":[\"...\" (optional)]}\n"
+    "YOU RECEIVE (as user JSON): {\"root\":\"<root>\", \"src\":\"<src file>\", \"command\":\"<cmd line>\", "
+    "\"hints\": {VAR: value, ...}, \"allowed_paths\":[\"...\" (optional)], "
+    "\"observations\": {\"src_snippet\":\"...\", \"dir_listings\": {\"utils\":[\"utils/cleanup.sh\", ...]}} (optional)}\n"
     "RESOLUTION RULES:\n"
     " - Apply variable expansion (${VAR}, $VAR, %VAR%) using provided 'hints'.\n"
     " - Normalize slashes to '/'; strip leading './' when possible; return paths relative to 'root'.\n"
     " - Consider only plausible script files (.sh,.bash,.ksh,.bat,.cmd,.ps1,.pl,.py).\n"
     " - IF 'allowed_paths' is provided, choose only from that list; otherwise be conservative.\n"
+    " - IF 'observations' are present, use them to refine your choice, but still obey 'allowed_paths'.\n"
     "OUTPUT (STRICT JSON): {\"targets\":[\"relative/path\", ...], \"reasoning\":\"<brief why>\"}\n"
     "FAIL SAFE: If uncertain, return an empty 'targets' list (do not guess).\n"
 )
@@ -236,11 +239,15 @@ class Planner:
             c.executescript("""
             CREATE TABLE IF NOT EXISTS plan_files(run_id INT, path TEXT, priority INT);
             CREATE TABLE IF NOT EXISTS plan_params(run_id INT, key TEXT, value TEXT);
+            CREATE TABLE IF NOT EXISTS env_hints(run_id INT, name TEXT, value TEXT);
             """)
             c.executemany("INSERT INTO plan_files VALUES (?,?,?)",
                           [(self.logger.run_id, it["path"], it["priority"]) for it in manifest.files])
             for k,v in (policy|{"budget":json.dumps(budget)}).items():
                 c.execute("INSERT INTO plan_params VALUES (?,?,?)", (self.logger.run_id, k, json.dumps(v) if not isinstance(v,str) else v))
+            if env_hints:
+                c.executemany("INSERT INTO env_hints VALUES (?,?,?)",
+                              [(self.logger.run_id, k, v) for k, v in env_hints.items()])
             c.commit()
 
         return manifest
@@ -389,6 +396,56 @@ class Mapper:
             out = out.replace(f"${{{k}}}", v).replace(f"${k}", v).replace(f"%{k}%", v)
         return _norm_path(out)
 
+    def _extract_dirs(self, src: str, raw: str, env: dict[str,str], allowed_set: set[str]) -> list[str]:
+        """Infer promising directories to list: caller's folder, any path-like envs, and literals in the raw string."""
+        dirs: set[str] = set()
+        # caller folder
+        parent = _norm_path("/".join(src.split("/")[:-1])) or "."
+        if parent and parent != ".": dirs.add(parent)
+        # path-like env values
+        for v in env.values():
+            v = (v or "").strip().strip('"').strip("'")
+            if "/" in v or v.startswith("."):
+                dirs.add(v.rstrip("/"))
+        # literals of the form "name/" in the raw target
+        import re as _re
+        for m in _re.findall(r"([A-Za-z0-9_.-]+/)", raw or ""):
+            dirs.add(m.rstrip("/"))
+        # ${VAR}/ where VAR is in env
+        for m in _re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/", raw or ""):
+            val = env.get(m)
+            if val:
+                dirs.add(val.rstrip("/"))
+        # keep only dirs that actually contain allowed files
+        pruned = set()
+        for d in dirs:
+            if any(p == d or p.startswith(d + "/") for p in allowed_set):
+                pruned.add(d)
+        return sorted(pruned)
+
+    def _list_candidates(self, allowed_set: set[str], base_dirs: list[str]) -> dict[str, list[str]]:
+        """Return directory -> up to 50 candidate script files under that directory from allowed_set."""
+        ALLOWED_EXTS = (".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py")
+        out: dict[str, list[str]] = {}
+        for d in base_dirs:
+            prefix = d.rstrip("/") + "/"
+            files = [p for p in allowed_set if p.startswith(prefix)]
+            files = [p for p in files if p.lower().endswith(ALLOWED_EXTS)]
+            if files:
+                out[d] = sorted(files)[:50]
+        return out
+
+    def _make_observations(self, io: RoleIO, src: str, raw: str, env: dict[str,str], allowed_set: set[str]) -> dict:
+        """Build a small observation payload for a second mapper pass."""
+        snippet = ""
+        try:
+            snippet = (io.root / src).read_text(encoding="utf-8", errors="ignore")[:1000]
+        except Exception:
+            pass
+        dirs = self._extract_dirs(src, raw, env, allowed_set)
+        return {"src_snippet": snippet, "dir_listings": self._list_candidates(allowed_set, dirs)}
+     
+
     def run(self, io: RoleIO, obs: ObservationBatch, policy: dict) -> GraphSnapshot:
         g = Graph()
         unresolved: list[dict] = []
@@ -449,6 +506,37 @@ class Mapper:
                         self.logger.log_llm(role="mapper", model="", endpoint="", prompt_chars=0, latency_ms=0.0,
                                             status=f"error:{ex}", src=src, command_snippet=cmd[:200], targets_count=0)
 
+            # Optional second pass: small reason–act loop with tool observations
+            if not targets and self.client:
+                obs_payload = self._make_observations(io, src, raw, env, allowed_set)
+                if obs_payload.get("src_snippet") or obs_payload.get("dir_listings"):
+                    user2 = json.dumps({
+                        "root": str(io.root), "src": src, "command": cmd,
+                        "hints": env, "allowed_paths": allowed_list,
+                        "observations": obs_payload
+                    }, ensure_ascii=False)
+                    try:
+                        content2, meta2 = self.client.chat(MAPPER_PROMPT, user2, return_meta=True)
+                        data2 = _json_load(content2 or "{}")
+                        cand2 = data2.get("targets") or []
+                        if isinstance(cand2, list):
+                            targets = [_norm_path(t) for t in cand2 if isinstance(t, str)]
+                            targets = [t for t in targets if t in allowed_set]
+                        why = (data2.get("reasoning") or "").strip() or why
+                        if self.logger:
+                            self.logger.log_llm(role="mapper", model=str(meta2.get("model","")), endpoint=str(meta2.get("endpoint","")),
+                                                prompt_chars=len(user2), input_tokens=meta2.get("prompt_tokens"),
+                                                output_tokens=meta2.get("completion_tokens"), total_tokens=meta2.get("total_tokens"),
+                                                latency_ms=float(meta2.get("latency_ms") or 0.0), status="ok",
+                                                src=src, command_snippet=(cmd + " [loop2]")[:200], targets_count=len(targets), reasoning=why[:500])
+                            if self.log_prompts:
+                                self.logger.log_prompt(role="mapper", prompt=self._redactor.redact(user2))
+                    except Exception as ex:
+                        if self.logger:
+                            self.logger.log_llm(role="mapper", model="", endpoint="", prompt_chars=0, latency_ms=0.0,
+                                                status=f"error:{ex}", src=src, command_snippet=(cmd + " [loop2]")[:200], targets_count=0)
+
+
             # Optional heuristic fallback
             if not targets and self.use_heuristic_fallback:
                 t = self._subst(raw, env)
@@ -508,6 +596,8 @@ class Writer:
 
     def run(self, io: RoleIO, out_dir: Path, snap: GraphSnapshot):
         out_dir.mkdir(parents=True, exist_ok=True)
+        # collapse duplicate edges before export (matches scoring's set semantics)
+        self._dedupe_edges(snap.graph)
         errs = self._validate(snap.graph)
         if errs and self.logger:
             for m in errs: self.logger.log("WARN", m)
@@ -546,7 +636,16 @@ class Writer:
             except Exception as ex:
                 self.logger and self.logger.log_llm(role="writer", model="", endpoint="", prompt_chars=0, latency_ms=0.0, status=f"error:{ex}", targets_count=0)
 
-
+    def _dedupe_edges(self, g: Graph) -> None:
+        seen = set()
+        uniq = []
+        for e in g.edges:
+            key = (e.src, e.dst, e.kind, e.command, e.dynamic, e.resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(e)
+        g.edges = uniq
 # -------------------- Runner + Factory --------------------
 
 class AgentRunner:
