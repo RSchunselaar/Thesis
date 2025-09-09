@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - scripts/w.pl
-edges:
-  - src: run.sh
-    dst: scripts/w.pl
-    kind: call
-    dge: perl "./scripts/w.pl"

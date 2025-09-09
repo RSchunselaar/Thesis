@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - scripts/filter.sh
-edges:
-  - src: run.sh
-    dst: scripts/filter.sh
-    kind: call
-    dge: ./scripts/filter.sh

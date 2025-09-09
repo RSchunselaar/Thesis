@@ -1,2 +1,0 @@
-function Invoke-Prep { Write-Host "ping" }
-# ps-mod // sg-salt:426751

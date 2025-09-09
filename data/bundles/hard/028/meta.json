@@ -1,9 +1,0 @@
-{
-  "platform": "linux",
-  "hard": true,
-  "pattern": "mk_ps_var_dotsource",
-  "features": [
-    "dot-sourcing",
-    "var-indirection"
-  ]
-}

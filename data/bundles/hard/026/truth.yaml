@@ -1,8 +1,0 @@
-nodes:
-  - bin/step.cmd
-  - run.cmd
-edges:
-  - src: run.cmd
-    dst: bin/step.cmd
-    kind: call
-    dge: call "!T!"

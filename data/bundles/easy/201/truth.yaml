@@ -1,8 +1,0 @@
-nodes:
-  - bin/rotate.sh
-  - run.sh
-edges:
-  - src: run.sh
-    dst: bin/rotate.sh
-    kind: call
-    dge: ./bin/rotate.sh

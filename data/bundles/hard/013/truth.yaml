@@ -1,8 +1,0 @@
-nodes:
-  - bin/filter.cmd
-  - run.cmd
-edges:
-  - src: run.cmd
-    dst: bin/filter.cmd
-    kind: call
-    dge: call "!TARGET!"

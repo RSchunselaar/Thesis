@@ -1,8 +1,0 @@
-nodes:
-  - pipes/load.sh
-  - run.sh
-edges:
-  - src: run.sh
-    dst: pipes/load.sh
-    kind: call
-    dge: ./pipes/load.sh

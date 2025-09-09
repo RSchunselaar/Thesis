@@ -1,8 +1,0 @@
-nodes:
-  - Run.cmd
-  - steps/filter.cmd
-edges:
-  - src: Run.cmd
-    dst: steps/filter.cmd
-    kind: call
-    dge: call "!TARGET!"

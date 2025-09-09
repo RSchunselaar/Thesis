@@ -1,8 +1,0 @@
-nodes:
-  - bin/stage.sh
-  - run.sh
-edges:
-  - src: run.sh
-    dst: bin/stage.sh
-    kind: call
-    dge: bash "$TARGET"

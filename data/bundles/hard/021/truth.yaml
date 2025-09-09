@@ -1,8 +1,0 @@
-nodes:
-  - bin/prep.cmd
-  - run.cmd
-edges:
-  - src: run.cmd
-    dst: bin/prep.cmd
-    kind: call
-    dge: call "!TARGET!"

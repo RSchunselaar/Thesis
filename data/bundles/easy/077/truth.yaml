@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - steps/ingest.sh
-edges:
-  - src: run.sh
-    dst: steps/ingest.sh
-    kind: call
-    dge: ./steps/ingest.sh

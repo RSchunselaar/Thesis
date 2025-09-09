@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - tasks/sync.sh
-edges:
-  - src: run.sh
-    dst: tasks/sync.sh
-    kind: call
-    dge: ./tasks/sync.sh

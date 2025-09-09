@@ -1,8 +1,0 @@
-nodes:
-  - Run.cmd
-  - tasks/archive.cmd
-edges:
-  - src: Run.cmd
-    dst: tasks/archive.cmd
-    kind: call
-    dge: call "!TARGET!"

@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - utils/ingest.sh
-edges:
-  - src: run.sh
-    dst: utils/ingest.sh
-    kind: call
-    dge: ./utils/ingest.sh

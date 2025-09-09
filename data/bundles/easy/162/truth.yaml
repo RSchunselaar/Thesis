@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - utils/load.sh
-edges:
-  - src: run.sh
-    dst: utils/load.sh
-    kind: call
-    dge: ./utils/load.sh

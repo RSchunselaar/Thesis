@@ -1,9 +1,0 @@
-{
-  "platform": "windows",
-  "hard": true,
-  "pattern": "mk_shell_varind",
-  "features": [
-    "interpreter-hop-bash",
-    "var-indirection"
-  ]
-}

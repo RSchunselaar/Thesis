@@ -1,9 +1,0 @@
-{
-  "platform": "linux",
-  "hard": false,
-  "pattern": "mk_shell_dispatch",
-  "features": [
-    "direct-call",
-    "fan-out"
-  ]
-}

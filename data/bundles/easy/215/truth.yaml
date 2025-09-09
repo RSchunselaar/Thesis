@@ -1,8 +1,0 @@
-nodes:
-  - bin/filter.sh
-  - run.sh
-edges:
-  - src: run.sh
-    dst: bin/filter.sh
-    kind: call
-    dge: ./bin/filter.sh

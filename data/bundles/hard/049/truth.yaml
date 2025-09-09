@@ -1,8 +1,0 @@
-nodes:
-  - Run.cmd
-  - steps/stage.cmd
-edges:
-  - src: Run.cmd
-    dst: steps/stage.cmd
-    kind: call
-    dge: call "!TARGET!"

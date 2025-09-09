@@ -1,8 +1,0 @@
-nodes:
-  - bin/rotate.cmd
-  - run.cmd
-edges:
-  - src: run.cmd
-    dst: bin/rotate.cmd
-    kind: call
-    dge: call "!TARGET!"

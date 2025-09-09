@@ -1,8 +1,0 @@
-nodes:
-  - run.sh
-  - utils/prep.sh
-edges:
-  - src: run.sh
-    dst: utils/prep.sh
-    kind: call
-    dge: ./utils/prep.sh
