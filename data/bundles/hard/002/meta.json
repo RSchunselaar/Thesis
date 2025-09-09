@@ -1,9 +1,10 @@
 {
-  "platform": "linux",
+  "platform": "windows",
   "hard": true,
-  "pattern": "mk_shell_varind",
+  "pattern": "mk_cmd_for_loop",
   "features": [
-    "interpreter-hop-bash",
+    "delayed-expansion",
+    "for-loop",
     "var-indirection"
   ]
 }

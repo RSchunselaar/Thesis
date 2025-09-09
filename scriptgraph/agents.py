@@ -263,7 +263,8 @@ class Reader:
         self._redactor = redactor or Redactor()
         self._rx_env_sh  = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$', re.M)
         self._rx_env_cmd = re.compile(r'^\s*set\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$', re.M)
-        self._rx_call_sh = re.compile(r'(?P<kind>(?:\.|source|bash|sh)\s+)(?P<target>[^\s;]+)')
+        self._rx_call_sh = re.compile(r'(?P<kind>(?:\.|source|bash|sh|ksh|python|python3|perl)\s+)(?P<target>[^\s;]+)')
+        self._rx_call_sh_var = re.compile(r'^\s*(?P<target>["\']?\$[A-Za-z_][A-Za-z0-9_]*["\']?)(?:\s|$)')
         self._rx_call_cmd = re.compile(r'\b(?P<kind>call|start)\s+(?P<target>[^\s&]+)', re.I)
         self._rx_call_ps1 = re.compile(r'(?:(?:^|\s)\.\s+(?P<dot>[^\s]+)|(?:^|\s)&\s*(?P<amp>[^\s]+))')
 
@@ -276,10 +277,17 @@ class Reader:
         if p.endswith(".pl"): return "pl"
         return "other"
 
-        # add helper inside Reader:
     def _plausible_target(self, tok: str) -> bool:
-        t = tok.strip().strip('"').strip("'")
-        return ("/" in t or "\\" in t or t.lower().endswith((".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py")))
+        t = (tok or "").strip().strip('"').strip("'")
+        if not t:
+            return False
+        if ("/" in t or "\\" in t or t.lower().endswith((".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py"))):
+            return True
+        return bool(re.match(
+            r"^(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!)$",
+            t
+        ))
+
 
     def run(self, io: RoleIO, manifest: ReadManifest) -> ObservationBatch:
         files_meta, env_vars, call_sites = [], [], []
@@ -336,28 +344,44 @@ class Reader:
                         "line": 0, "col": 0, "span": [0,0],
                         "dynamic": 1 if ("$" in tgt or "${" in tgt) else 0, "conf": 0.7
                     })
+                for raw in text.splitlines():
+                    m = self._rx_call_sh_var.search(raw)
+                    if not m:
+                        continue
+                    tgt = m.group("target")
+                    if not self._plausible_target(tgt):
+                        continue
+                    call_sites.append({
+                        "src": rel, "raw": tgt, "cmd": raw.strip(), "kind": "call",
+                        "line": 0, "col": 0, "span": [0,0],
+                        "dynamic": 1, "conf": 0.7
+                    })
+
             elif lang=="cmd":
                 for m in self._rx_call_cmd.finditer(text):
                     full = m.group(0).strip()
                     tgt  = m.group("target")
                     if not self._plausible_target(tgt):
                         continue
+                    dyn  = 1 if ("$" in tgt or "$(" in full) else 0
                     call_sites.append({
                         "src": rel, "raw": tgt, "cmd": full, "kind": "call",
                         "line": 0, "col": 0, "span": [0,0],
-                        "dynamic": 1 if "%" in tgt else 0, "conf": 0.7
+                        "dynamic": dyn, "conf": 0.7
                     })
+
             elif lang=="ps1":
                 for m in self._rx_call_ps1.finditer(text):
                     full = m.group(0).strip()
                     tgt  = m.group("dot") or m.group("amp")
                     if not self._plausible_target(tgt):
                         continue
+                    is_dyn = 1 if (tgt.strip().startswith("$") or "$(" in full or "Join-Path" in full or "Invoke-Expression" in full) else 0
                     call_sites.append({
                         "src": rel, "raw": tgt, "cmd": full,
                         "kind": "source" if m.group("dot") else "call",
                         "line": 0, "col": 0, "span": [0,0],
-                        "dynamic": 0, "conf": 0.7
+                        "dynamic": is_dyn, "conf": 0.7
                     })
         # Write to SQLite
         if self.logger and self.logger.run_id is not None:
@@ -392,9 +416,18 @@ class Mapper:
         return env
 
     def _subst(self, s: str, env: dict[str,str]) -> str:
-        out = s
-        for k,v in env.items():
-            out = out.replace(f"${{{k}}}", v).replace(f"${k}", v).replace(f"%{k}%", v)
+        out = (s or "").strip().strip('"').strip("'")
+        for _ in range(5):
+            prev = out
+            for k, v in env.items():
+                vv = (v or "").strip().strip('"').strip("'")
+                # Windows CMD
+                out = out.replace(f"%{k}%", vv)
+                out = out.replace(f"!{k}!", vv)
+                # POSIX / PS
+                out = out.replace(f"${{{k}}}", vv).replace(f"${k}", vv)
+            if out == prev:
+                break
         return _norm_path(out)
 
     def _extract_dirs(self, src: str, raw: str, env: dict[str,str], allowed_set: set[str]) -> list[str]:
@@ -405,8 +438,8 @@ class Mapper:
         if parent and parent != ".": dirs.add(parent)
         # path-like env values
         for v in env.values():
-            v = (v or "").strip().strip('"').strip("'")
-            if "/" in v or v.startswith("."):
+            v = (v or "").strip().strip('"').strip("'").replace("\\", "/")
+            if ("/" in v or v.startswith(".")) or any(p == v or p.startswith(v + "/") for p in allowed_set):
                 dirs.add(v.rstrip("/"))
         # literals of the form "name/" in the raw target
         import re as _re

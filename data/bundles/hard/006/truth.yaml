@@ -1,8 +1,8 @@
 nodes:
-  - run.sh
-  - scripts/w.pl
+  - Run.cmd
+  - tasks/step.cmd
 edges:
-  - src: run.sh
-    dst: scripts/w.pl
+  - src: Run.cmd
+    dst: tasks/step.cmd
     kind: call
-    dge: perl "./scripts/w.pl"
+    dge: call "!T!"

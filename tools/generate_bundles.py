@@ -106,7 +106,67 @@ def mk_cmd_varind(root: Path, windows: bool, rnd: random.Random):
     feats = {"delayed-expansion","var-indirection"}
     return {src,dst}, [{"src":src,"dst":dst,"kind":"call","dge": dge_cmd_call("!TARGET!")}], [run], feats
 
-# --- NEW HARD PATTERNS ---
+# --- NEW HARD PATTERNS --
+def mk_shell_varcall(root: Path, windows: bool, rnd: random.Random):
+    """
+    Harder variant: pure variable invocation of the target ($TARGET), no explicit interpreter.
+    """
+    dirn = rnd.choice(DIR_VOCAB)
+    v = rnd.choice(VERBS)
+    run = root/"run.sh"
+    tgt = root/dirn/f"{v}.sh"
+    write(tgt, f"#!/usr/bin/env bash\n# {salted(rnd,'tgt')}\necho \"{rnd.choice(ECHOES)}\"\n")
+    body = f"""#!/usr/bin/env bash
+# {salted(rnd,'run')}
+BASE="./{dirn}"
+NAME="{v}.sh"
+TARGET="$BASE/$NAME"
+"$TARGET" "$TARGET"
+"""
+    write(run, body)
+    src = canon(run,root,windows); dst = canon(tgt,root,windows)
+    feats = {"var-indirection"}
+    return {src,dst}, [{"src":src,"dst":dst,"kind":"call","dge": '"$TARGET"'}], [run], feats
+
+def mk_shell_interp_python_var(root: Path, windows: bool, rnd: random.Random):
+    """
+    Interpreter hop via a variable ($INTERP) + variable target ($TARGET):
+      INTERP="python"; TARGET="./tools/worker.py"; $INTERP "$TARGET"
+    """
+    run = root/"run.sh"
+    pyf = root/"tools"/"worker.py"
+    write(pyf, f"#!/usr/bin/env python3\n# {salted(rnd,'py')}\nprint('{rnd.choice(ECHOES)}')\n")
+    body = f"""#!/usr/bin/env bash
+# {salted(rnd,'run')}
+TARGET="./tools/worker.py"
+INTERP="python"
+$INTERP "$TARGET"
+"""
+    write(run, body)
+    src = canon(run,root,windows); dst = canon(pyf,root,windows)
+    feats = {"interpreter-hop-python","cross-language","var-indirection"}
+    return {src,dst}, [{"src":src,"dst":dst,"kind":"call","dge": '$INTERP "$TARGET"'}], [run], feats
+
+def mk_shell_source_varprefix(root: Path, windows: bool, rnd: random.Random):
+    """
+    Dot-source with a variable prefix: . ${UTILS}/lib.sh
+    """
+    dirn = rnd.choice(DIR_VOCAB)
+    v = "lib"
+    run = root/"run.sh"
+    lib = root/dirn/f"{v}.sh"
+    write(lib, f"#!/usr/bin/env bash\n# {salted(rnd,'lib')}\nhello(){{ echo \"{rnd.choice(ECHOES)}\"; }}\n")
+    body = f"""#!/usr/bin/env bash
+# {salted(rnd,'run')}
+UTILS="./{dirn}"
+. ${{UTILS}}/{v}.sh
+hello
+"""
+    write(run, body)
+    src = canon(run,root,windows); dst = canon(lib,root,windows)
+    feats = {"dot-sourcing","var-indirection"}
+    return {src,dst}, [{"src":src,"dst":dst,"kind":"source","dge":". ${UTILS}/lib.sh"}], [run], feats
+ 
 def mk_shell_dot_source(root: Path, windows: bool, rnd: random.Random):
     # Bash dot/source to pull functions into caller scope
     dirn = rnd.choice(DIR_VOCAB)
@@ -183,14 +243,60 @@ def mk_ps_var_dotsource(root: Path, windows: bool, rnd: random.Random):
     feats = {"dot-sourcing","var-indirection"}
     return {src,dst}, [{"src":src,"dst":dst,"kind":"source","dge": dge_ps_source("$m")}], [run], feats
 
+def mk_cmd_chain_vars(root: Path, windows: bool, rnd: random.Random):
+    # Chain of env vars with delayed expansion, final CALL through !TARGET!
+    run = root / "Run.cmd"
+    dirn = rnd.choice(["bin", "steps", "tasks"])
+    sub  = root / dirn / "step.cmd"
+    write(sub, "@echo off\r\necho " + rnd.choice(ECHOES) + "\r\n")
+    body = (
+        "@echo off\r\nsetlocal EnableDelayedExpansion\r\n"
+        f"set D1={dirn}\r\n"
+        "set NAME=step.cmd\r\n"
+        "set D2=!D1!\r\n"
+        "set TARGET=!D2!\\!NAME!\r\n"
+        "call \"!TARGET!\"\r\n"
+    )
+    write(run, body)
+    src = canon(run, root, windows); dst = canon(sub, root, windows)
+    feats = {"var-indirection", "delayed-expansion"}
+    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": dge_cmd_call("!TARGET!")}], [run], feats
+
+def mk_ps_amp_invoke_var(root: Path, windows: bool, rnd: random.Random):
+    # Ampersand invocation of a variable-resolved path (& $m)
+    run = root / "Run.ps1"
+    mod = root / "Utils.ps1"
+    write(mod, f"function Invoke-Work {{ Write-Host \"{rnd.choice(ECHOES)}\" }}\n# {salted(rnd,'ps-mod3')}\n")
+    body = (
+        "$m = Join-Path $PSScriptRoot 'Utils.ps1'\n"
+        "& $m\n"
+        "Invoke-Work\n"
+        f"# {salted(rnd,'ps-run3')}\n"
+    )
+    write(run, body)
+    src = canon(run, root, windows); dst = canon(mod, root, windows)
+    feats = {"var-indirection", "dot-sourcing"}
+    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": "& $m"}], [run], feats
+
 def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_hashes: set, min_hard_features: int):
     windows = platform in ("windows","mixed") and (platform=="windows" or rnd.random()<0.5)
     # pattern library
     makers_easy = [mk_shell_linear, mk_shell_dispatch, mk_ps_dotsource]
     makers_hard = [
-        mk_shell_varind, mk_cmd_varind, mk_ps_dotsource,
-        mk_shell_dot_source, mk_shell_interp_python, mk_shell_interp_perl,
-        mk_cmd_for_loop, mk_ps_var_dotsource
+        # bash / shell families
+        mk_shell_varind,
+        mk_shell_varcall,               
+        mk_shell_dot_source,
+        mk_shell_source_varprefix,      
+        mk_shell_interp_python,
+        mk_shell_interp_python_var,     
+        mk_shell_interp_perl,
+        mk_cmd_varind,
+        mk_cmd_for_loop,
+        mk_ps_dotsource,
+        mk_ps_var_dotsource,
+        mk_cmd_chain_vars,
+        mk_ps_amp_invoke_var
     ]
     maker = rnd.choice(makers_hard if hard else makers_easy)
 

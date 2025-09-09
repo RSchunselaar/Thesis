@@ -1,9 +1,10 @@
 {
-  "platform": "linux",
+  "platform": "windows",
   "hard": true,
-  "pattern": "mk_shell_interp_perl",
+  "pattern": "mk_shell_interp_python_var",
   "features": [
     "cross-language",
-    "interpreter-hop-perl"
+    "interpreter-hop-python",
+    "var-indirection"
   ]
 }

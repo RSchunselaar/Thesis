@@ -1,8 +1,8 @@
 nodes:
   - run.sh
-  - scripts/w.pl
+  - tools/worker.py
 edges:
   - src: run.sh
-    dst: scripts/w.pl
+    dst: tools/worker.py
     kind: call
-    dge: perl "./scripts/w.pl"
+    dge: $INTERP "$TARGET"

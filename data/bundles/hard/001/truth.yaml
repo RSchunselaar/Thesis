@@ -1,8 +1,8 @@
 nodes:
-  - run.sh
-  - tools/worker.py
+  - bin/step.cmd
+  - run.cmd
 edges:
-  - src: run.sh
-    dst: tools/worker.py
+  - src: run.cmd
+    dst: bin/step.cmd
     kind: call
-    dge: python "$TARGET"
+    dge: call "!T!"

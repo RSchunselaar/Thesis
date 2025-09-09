@@ -1,8 +1,8 @@
 nodes:
-  - run.sh
-  - tasks/filter.sh
+  - run.cmd
+  - tasks/step.cmd
 edges:
-  - src: run.sh
-    dst: tasks/filter.sh
+  - src: run.cmd
+    dst: tasks/step.cmd
     kind: call
-    dge: bash "$TARGET"
+    dge: call "!T!"

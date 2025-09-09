@@ -24,6 +24,18 @@ CALL_RE = re.compile(
       # direct invocation ./x.sh (no interpreter)
       (?P<path3>["']?(?:\./)?[\w./-]+\.(?:sh|bash|ksh)["']?)
     )
+    |
+    (?:
+      # python interpreter calling a .py script
+      (?:python(?:3)?)\s+
+      (?P<path_py>["']?(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)?[\w./-]+\.py["']?)
+    )
+    |
+    (?:
+      # perl interpreter calling a .pl script
+      perl\s+
+      (?P<path_pl>["']?(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)?[\w./-]+\.pl["']?)
+    )
     """,
     re.VERBOSE,
 )
@@ -33,7 +45,7 @@ VAR_HINT = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 def _destinations(cmd: str) -> Iterable[str]:
     outs: list[str] = []
     for m in CALL_RE.finditer(cmd):
-        p = m.group("path1") or m.group("path2") or m.group("path3")
+        p = m.group("path1") or m.group("path2") or m.group("path3") or m.group("path_py") or m.group("path_pl")
         if p:
             # ignore variable assignments like FOO=./x.sh
             if "=" in p.split("/")[0]:

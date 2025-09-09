@@ -1,10 +1,10 @@
 {
   "platform": "linux",
   "hard": true,
-  "pattern": "mk_cmd_for_loop",
+  "pattern": "mk_shell_interp_python_var",
   "features": [
-    "delayed-expansion",
-    "for-loop",
+    "cross-language",
+    "interpreter-hop-python",
     "var-indirection"
   ]
 }
