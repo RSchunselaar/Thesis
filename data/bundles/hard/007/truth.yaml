@@ -1,0 +1,8 @@
+nodes:
+  - run.cmd
+  - steps/ship.cmd
+edges:
+  - src: run.cmd
+    dst: steps/ship.cmd
+    kind: call
+    dge: call "!TARGET!"

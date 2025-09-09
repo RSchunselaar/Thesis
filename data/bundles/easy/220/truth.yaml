@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - tasks/load.sh
+  - tasks/stage.sh
+edges:
+  - src: run.sh
+    dst: tasks/stage.sh
+    kind: call
+    dge: ./tasks/stage.sh
+  - src: run.sh
+    dst: tasks/load.sh
+    kind: call
+    dge: ./tasks/load.sh

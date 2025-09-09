@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - scripts/ingest.sh
+  - scripts/load.sh
+edges:
+  - src: run.sh
+    dst: scripts/load.sh
+    kind: call
+    dge: ./scripts/load.sh
+  - src: run.sh
+    dst: scripts/ingest.sh
+    kind: call
+    dge: ./scripts/ingest.sh

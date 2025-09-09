@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - tasks/merge.sh
+  - tasks/rotate.sh
+edges:
+  - src: run.sh
+    dst: tasks/rotate.sh
+    kind: call
+    dge: ./tasks/rotate.sh
+  - src: run.sh
+    dst: tasks/merge.sh
+    kind: call
+    dge: ./tasks/merge.sh

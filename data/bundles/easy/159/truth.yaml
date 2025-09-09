@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - tasks/merge.sh
+edges:
+  - src: run.sh
+    dst: tasks/merge.sh
+    kind: call
+    dge: ./tasks/merge.sh

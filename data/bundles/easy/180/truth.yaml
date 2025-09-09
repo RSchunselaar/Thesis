@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - utils/ingest.sh
+  - utils/ship.sh
+edges:
+  - src: run.sh
+    dst: utils/ship.sh
+    kind: call
+    dge: ./utils/ship.sh
+  - src: run.sh
+    dst: utils/ingest.sh
+    kind: call
+    dge: ./utils/ingest.sh

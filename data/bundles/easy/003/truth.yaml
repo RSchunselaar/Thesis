@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - utils/filter.sh
+  - utils/sync.sh
+edges:
+  - src: run.sh
+    dst: utils/sync.sh
+    kind: call
+    dge: ./utils/sync.sh
+  - src: run.sh
+    dst: utils/filter.sh
+    kind: call
+    dge: ./utils/filter.sh

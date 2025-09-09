@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - scripts/rotate.sh
+edges:
+  - src: run.sh
+    dst: scripts/rotate.sh
+    kind: call
+    dge: ./scripts/rotate.sh

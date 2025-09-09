@@ -1,0 +1,13 @@
+nodes:
+  - pipes/archive.sh
+  - pipes/rotate.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: pipes/archive.sh
+    kind: call
+    dge: ./pipes/archive.sh
+  - src: run.sh
+    dst: pipes/rotate.sh
+    kind: call
+    dge: ./pipes/rotate.sh

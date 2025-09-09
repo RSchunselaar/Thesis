@@ -1,0 +1,8 @@
+nodes:
+  - jobs/archive.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: jobs/archive.sh
+    kind: call
+    dge: ./jobs/archive.sh

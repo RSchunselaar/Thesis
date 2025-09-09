@@ -1,0 +1,8 @@
+nodes:
+  - Run.cmd
+  - bin/stage.cmd
+edges:
+  - src: Run.cmd
+    dst: bin/stage.cmd
+    kind: call
+    dge: call "!TARGET!"

@@ -1,0 +1,8 @@
+nodes:
+  - pipes/filter.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: pipes/filter.sh
+    kind: call
+    dge: ./pipes/filter.sh

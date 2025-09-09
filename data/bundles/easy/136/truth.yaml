@@ -1,0 +1,8 @@
+nodes:
+  - lib/stage.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: lib/stage.sh
+    kind: call
+    dge: ./lib/stage.sh

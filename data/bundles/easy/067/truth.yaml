@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - utils/stage.sh
+edges:
+  - src: run.sh
+    dst: utils/stage.sh
+    kind: call
+    dge: ./utils/stage.sh

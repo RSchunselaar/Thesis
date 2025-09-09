@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - tasks/filter.sh
+  - tasks/ingest.sh
+edges:
+  - src: run.sh
+    dst: tasks/ingest.sh
+    kind: call
+    dge: ./tasks/ingest.sh
+  - src: run.sh
+    dst: tasks/filter.sh
+    kind: call
+    dge: ./tasks/filter.sh

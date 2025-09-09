@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - tasks/filter.sh
+edges:
+  - src: run.sh
+    dst: tasks/filter.sh
+    kind: call
+    dge: ./tasks/filter.sh

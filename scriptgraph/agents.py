@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Dict, List, Tuple, Optional
 from .logging_db import RunLogger
 from .graph import Graph, Edge
+from .exporter import write_artifacts
 from .scanner import Scanner
 from .llm_adapter import LLMClient, LLMConfig
 from typing import Any
@@ -602,25 +603,9 @@ class Writer:
         if errs and self.logger:
             for m in errs: self.logger.log("WARN", m)
 
-        # Artifacts
-        predicted = out_dir / "predicted_graph.yaml"
-        dotfile   = out_dir / "graph.dot"
-        pngfile   = out_dir / "graph.png"  # optional if you have dot
-        report    = out_dir / "run_report.json"
-
-        predicted.write_text(snap.graph.to_yaml(), encoding="utf-8")
-        dotfile.write_text(snap.graph.to_dot(), encoding="utf-8")
-        report.write_text(json.dumps({
-            "coverage": snap.coverage,
-            "unresolved": snap.unresolved[:50],
-        }, indent=2), encoding="utf-8")
-
-        if self.logger and self.logger.run_id is not None:
-            c = self.logger.conn
-            c.executescript("""CREATE TABLE IF NOT EXISTS artifacts(run_id INT, predicted_graph_path TEXT, report_path TEXT);""")
-            c.execute("INSERT INTO artifacts VALUES (?,?,?)", (self.logger.run_id, str(predicted), str(report)))
-            self.logger.log("INFO", f"Artifacts: {predicted} ; {report}")
-            c.commit()
+        # Deterministic export & normalization shared by all variants
+        write_artifacts(root=io.root, out_dir=out_dir, graph=snap.graph,
+                        coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger)
 
         # Optional human bullets via LLM
         if self.client:
@@ -707,12 +692,11 @@ class AgentRunner:
 
         outp = Path(out_dir)
         if self.roles == "4R":
-            writer.run(io, outp, snap)
+            writer.run(io, outp, snap)               # Writer uses shared Exporter + optional LLM bullets
         else:
-            # Emit artifacts without LLM Writer
-            (outp).mkdir(parents=True, exist_ok=True)
-            (outp / "predicted_graph.yaml").write_text(snap.graph.to_yaml(), encoding="utf-8")
-            (outp / "graph.dot").write_text(snap.graph.to_dot(), encoding="utf-8")
+            # 2R: reuse Exporter directly (no LLM bullets)
+            write_artifacts(root=io.root, out_dir=outp, graph=snap.graph,
+                            coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger)
         return snap.graph
 
 def llm_from_config(cfg) -> LLMClient:

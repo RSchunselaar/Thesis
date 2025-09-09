@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - steps/filter.sh
+  - steps/merge.sh
+edges:
+  - src: run.sh
+    dst: steps/merge.sh
+    kind: call
+    dge: ./steps/merge.sh
+  - src: run.sh
+    dst: steps/filter.sh
+    kind: call
+    dge: ./steps/filter.sh

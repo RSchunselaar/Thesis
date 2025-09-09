@@ -1,0 +1,8 @@
+nodes:
+  - pipes/prep.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: pipes/prep.sh
+    kind: call
+    dge: ./pipes/prep.sh

@@ -1,0 +1,13 @@
+nodes:
+  - bin/archive.sh
+  - bin/merge.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: bin/merge.sh
+    kind: call
+    dge: ./bin/merge.sh
+  - src: run.sh
+    dst: bin/archive.sh
+    kind: call
+    dge: ./bin/archive.sh

@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - utils/merge.sh
+  - utils/stage.sh
+edges:
+  - src: run.sh
+    dst: utils/merge.sh
+    kind: call
+    dge: ./utils/merge.sh
+  - src: run.sh
+    dst: utils/stage.sh
+    kind: call
+    dge: ./utils/stage.sh

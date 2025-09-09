@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - steps/archive.sh
+  - steps/filter.sh
+edges:
+  - src: run.sh
+    dst: steps/filter.sh
+    kind: call
+    dge: ./steps/filter.sh
+  - src: run.sh
+    dst: steps/archive.sh
+    kind: call
+    dge: ./steps/archive.sh

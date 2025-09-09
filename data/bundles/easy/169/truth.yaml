@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - steps/rotate.sh
+edges:
+  - src: run.sh
+    dst: steps/rotate.sh
+    kind: call
+    dge: ./steps/rotate.sh

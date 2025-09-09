@@ -1,0 +1,8 @@
+nodes:
+  - mods/sync.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: mods/sync.sh
+    kind: call
+    dge: ./mods/sync.sh

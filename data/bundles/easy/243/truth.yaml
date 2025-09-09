@@ -1,0 +1,13 @@
+nodes:
+  - jobs/ingest.sh
+  - jobs/stage.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: jobs/stage.sh
+    kind: call
+    dge: ./jobs/stage.sh
+  - src: run.sh
+    dst: jobs/ingest.sh
+    kind: call
+    dge: ./jobs/ingest.sh

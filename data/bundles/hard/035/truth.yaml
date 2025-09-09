@@ -1,0 +1,8 @@
+nodes:
+  - lib/load.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: lib/load.sh
+    kind: call
+    dge: bash "$TARGET"

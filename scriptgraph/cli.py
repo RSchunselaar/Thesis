@@ -7,6 +7,7 @@ from .config import Config
 from .utils import disable_network
 from .logging_db import RunLogger
 from .scanner import Scanner
+from .exporter import write_artifacts
 from .graph import Graph
 from .agent_mapper import AgentMapper
 from .graph import Graph, Edge
@@ -34,11 +35,11 @@ try:
 except Exception:
     HAS_LLM = False
 
-def _write_outputs(out_dir: Path, g: Graph):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
-    (out_dir / "graph.dot").write_text(g.to_dot(), encoding="utf-8")
-    (out_dir / "predicted_graph.yaml").write_text(g.to_yaml(), encoding="utf-8")
+def _write_outputs(root_dir: Path, out_dir: Path, g: Graph):
+    """Unified, normalized artifacts (bundle-relative, fwd slashes, lowercase on Windows)."""
+    coverage = {"touched": len(g.nodes), "total": len(g.nodes)}
+    unresolved: list[dict] = []
+    write_artifacts(root=root_dir.resolve(), out_dir=out_dir, graph=g, coverage=coverage, unresolved=unresolved)
 
 def _freeze_llm_specs(out_dir: Path, cfg: Config) -> None:
     """Write prompts and model config to out/llm_specs.json for reproducibility."""
@@ -104,7 +105,7 @@ def cmd_scan(args):
     try:
         scanner = Scanner(cfg.parsing.include_ext)
         g = scanner.scan(args.folder)
-        _write_outputs(Path(args.out), g)
+        _write_outputs(Path(args.folder), Path(args.out), g)
         logger.log(
             "INFO", f"Scanned {args.folder}; nodes={len(g.nodes)} edges={len(g.edges)}"
         )
@@ -138,7 +139,7 @@ def cmd_map(args):
         # Use the YAML's directory as root when possible
         root_dir = Path(args.root or Path(args.graph_yaml).parent).resolve()
         g2 = agent.map_bundle(str(root_dir), g)
-        _write_outputs(Path(args.out), g2)
+        _write_outputs(root_dir, Path(args.out), g2)
         logger.log("INFO", f"Mapped dynamic edges; edges={len(g2.edges)}")
     finally:
         logger.finish()
@@ -155,7 +156,7 @@ def cmd_all(args):
         g = scanner.scan(args.folder)
         agent = AgentMapper(client=_llm_from_config(cfg))
         g2 = agent.map_bundle(args.folder, g)
-        _write_outputs(Path(args.out), g2)
+        _write_outputs(Path(args.folder), Path(args.out), g2)
         _freeze_llm_specs(Path(args.out), cfg)
         logger.log(
             "INFO", f"Completed scan+map; nodes={len(g2.nodes)} edges={len(g2.edges)}"

@@ -1,0 +1,13 @@
+nodes:
+  - pipes/ingest.sh
+  - pipes/merge.sh
+  - run.sh
+edges:
+  - src: run.sh
+    dst: pipes/merge.sh
+    kind: call
+    dge: ./pipes/merge.sh
+  - src: run.sh
+    dst: pipes/ingest.sh
+    kind: call
+    dge: ./pipes/ingest.sh

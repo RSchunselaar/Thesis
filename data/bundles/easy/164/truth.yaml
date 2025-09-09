@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - scripts/archive.sh
+edges:
+  - src: run.sh
+    dst: scripts/archive.sh
+    kind: call
+    dge: ./scripts/archive.sh

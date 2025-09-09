@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - steps/ingest.sh
+  - steps/sync.sh
+edges:
+  - src: run.sh
+    dst: steps/ingest.sh
+    kind: call
+    dge: ./steps/ingest.sh
+  - src: run.sh
+    dst: steps/sync.sh
+    kind: call
+    dge: ./steps/sync.sh

@@ -1,0 +1,8 @@
+{
+  "platform": "windows",
+  "hard": false,
+  "pattern": "mk_shell_linear",
+  "features": [
+    "direct-call"
+  ]
+}

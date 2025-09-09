@@ -1,0 +1,8 @@
+nodes:
+  - run.sh
+  - utils/rotate.sh
+edges:
+  - src: run.sh
+    dst: utils/rotate.sh
+    kind: call
+    dge: bash "$TARGET"

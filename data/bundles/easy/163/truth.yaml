@@ -1,0 +1,13 @@
+nodes:
+  - run.sh
+  - scripts/archive.sh
+  - scripts/load.sh
+edges:
+  - src: run.sh
+    dst: scripts/archive.sh
+    kind: call
+    dge: ./scripts/archive.sh
+  - src: run.sh
+    dst: scripts/load.sh
+    kind: call
+    dge: ./scripts/load.sh

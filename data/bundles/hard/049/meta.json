@@ -1,0 +1,9 @@
+{
+  "platform": "linux",
+  "hard": true,
+  "pattern": "mk_cmd_varind",
+  "features": [
+    "delayed-expansion",
+    "var-indirection"
+  ]
+}
