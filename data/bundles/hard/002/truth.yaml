@@ -1,8 +1,8 @@
 nodes:
-  - run.cmd
-  - tasks/step.cmd
+  - "run.sh"
+  - "tasks/tasks/archive.sh"
 edges:
-  - src: run.cmd
-    dst: tasks/step.cmd
-    kind: call
-    dge: call "!T!"
+  - src: "run.sh"
+    dst: "tasks/tasks/archive.sh"
+    kind: "call"
+    dge: "bash \"$TARGET\""

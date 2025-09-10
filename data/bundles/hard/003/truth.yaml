@@ -1,8 +1,8 @@
 nodes:
-  - run.sh
-  - tools/worker.py
+  - "run.cmd"
+  - "steps/step.cmd"
 edges:
-  - src: run.sh
-    dst: tools/worker.py
-    kind: call
-    dge: $INTERP "$TARGET"
+  - src: "run.cmd"
+    dst: "steps/step.cmd"
+    kind: "call"
+    dge: "call \"!T!\""

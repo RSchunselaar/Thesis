@@ -6,6 +6,45 @@ KINDS = ("easy","hard")
 DIR_VOCAB = ["utils","lib","jobs","steps","tasks","mods","bin","pipes","scripts"]
 VERBS = ["prep","load","filter","merge","archive","rotate","sync","ship","stage","ingest"]
 ECHOES = ["ok","done","ready","processed","success","step-complete","hello","ping","work"]
+NOISE_DIR_VOCAB = ["examples","demo","legacy","samples","tmp","tools","experiments","play","misc","contrib","vendor","third_party"]
+NOISE_EXTS = [".sh",".cmd",".ps1",".py",".pl"]
+NOISE_ECHOS = ["noop","noise","sample","example","unused","placeholder","debug"]
+
+def _write_noise_file(p: Path, rnd: random.Random):
+    ext = p.suffix.lower()
+    if ext in (".sh", ".bash", ".ksh"):
+        body = f"#!/usr/bin/env bash\n# {salted(rnd,'noise')}\necho \"{rnd.choice(NOISE_ECHOS)}\"\n"
+    elif ext == ".cmd":
+        body = f"@echo off\r\nrem {salted(rnd,'noise')}\recho {rnd.choice(NOISE_ECHOS)}\r\n"
+    elif ext == ".ps1":
+        body = f"# {salted(rnd,'noise')}\nWrite-Host \"{rnd.choice(NOISE_ECHOS)}\"\n"
+    elif ext == ".py":
+        body = f"#!/usr/bin/env python3\n# {salted(rnd,'noise')}\nprint('{rnd.choice(NOISE_ECHOS)}')\n"
+    elif ext == ".pl":
+        body = f"#!/usr/bin/env perl\n# {salted(rnd,'noise')}\nprint \"{rnd.choice(NOISE_ECHOS)}\\n\";\n"
+    else:
+        body = f"# {salted(rnd,'noise')}\n"
+    write(p, body)
+
+def add_noise(root: Path, rnd: random.Random, *, dirs: int, files_per_dir: int):
+    """
+    Create decoy subtrees with many non-referenced scripts across languages.
+    They enlarge the search space but do not affect truth.yaml.
+    """
+    made = []
+    for i in range(dirs):
+        # unique-ish dir names
+        base = rnd.choice(NOISE_DIR_VOCAB)
+        d = root / f"{base}-{i:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        for j in range(files_per_dir):
+            ext = rnd.choice(NOISE_EXTS)
+            stem = f"{rnd.choice(VERBS)}_{j:03d}"
+            p = d / f"{stem}{ext}"
+            _write_noise_file(p, rnd)
+            made.append(p)
+    return made
+
 
 def canon(p: Path, root: Path, windows: bool):
     # make path relative to bundle root, normalize to forward slashes
@@ -278,6 +317,94 @@ def mk_ps_amp_invoke_var(root: Path, windows: bool, rnd: random.Random):
     feats = {"var-indirection", "dot-sourcing"}
     return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": "& $m"}], [run], feats
 
+def mk_shell_multi_chain(root: Path, windows: bool, rnd: random.Random):
+    """
+    Multi-level var chain across a dot-sourced env file.
+      - env.sh defines BASE, REL, NAME
+      - run.sh sources env.sh, builds TARGET="$BASE/$REL/$NAME", then bash "$TARGET"
+    """
+    run = root / "run.sh"
+    env = root / "etc" / "env.sh"
+    dirn = rnd.choice(DIR_VOCAB)
+    sub  = rnd.choice(["steps","tasks","bin"])
+    v    = rnd.choice(VERBS)
+    target = root / dirn / sub / f"{v}.sh"
+
+    write(target, f"#!/usr/bin/env bash\n# {salted(rnd,'tgt')}\necho \"{rnd.choice(ECHOES)}\"\n")
+    write(env,    f"# {salted(rnd,'env')}\nBASE=\"./{dirn}\"\nREL=\"{sub}\"\nNAME=\"{v}.sh\"\n")
+
+    body = f"""#!/usr/bin/env bash
+# {salted(rnd,'run')}
+. ./etc/env.sh
+D1="$BASE/$REL"
+TARGET="$D1/$NAME"
+bash "$TARGET"
+"""
+    write(run, body)
+    src = canon(run, root, windows); dst = canon(target, root, windows)
+    feats = {"dot-sourcing","var-indirection","interpreter-hop-bash","multi-hop"}
+    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": 'bash "$TARGET"'}], [run], feats
+
+
+def mk_cmd_multi_chain(root: Path, windows: bool, rnd: random.Random):
+    """
+    Multi-level var chain in CMD with delayed expansion and a FOR hop:
+      set D1=steps
+      set D2=!D1!\core
+      set NAME=step.cmd
+      for %%F in (!NAME!) do set TARGET=!D2!\%%F
+      call "!TARGET!"
+    """
+    run  = root / "Run.cmd"
+    d1   = rnd.choice(["steps","tasks","bin"])
+    d2   = rnd.choice(["core","work","sub"])
+    sub  = root / d1 / d2 / "step.cmd"
+    write(sub, "@echo off\r\necho " + rnd.choice(ECHOES) + "\r\n")
+
+    body = (
+        "@echo off\r\nsetlocal EnableDelayedExpansion\r\n"
+        f"set D1={d1}\r\n"
+        f"set D2=!D1!\\{d2}\r\n"
+        "set NAME=step.cmd\r\n"
+        "for %%F in (!NAME!) do set TARGET=!D2!\\%%F\r\n"
+        "call \"!TARGET!\"\r\n"
+    )
+    write(run, body)
+    src = canon(run, root, windows); dst = canon(sub, root, windows)
+    feats = {"for-loop","delayed-expansion","var-indirection","multi-hop"}
+    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": dge_cmd_call("!TARGET!")}], [run], feats
+
+
+def mk_ps_multi_chain(root: Path, windows: bool, rnd: random.Random):
+    """
+    Multi-level Join-Path chain via dot-sourced Env.ps1:
+      Env.ps1: $BASE=$PSScriptRoot/<dir>; $REL='<sub>'; $NAME='<verb>.ps1'
+      Run.ps1: . ./Env.ps1; $D1 = Join-Path $BASE $REL; $Full = Join-Path $D1 $NAME; & $Full
+    """
+    run  = root / "Run.ps1"
+    env  = root / "Env.ps1"
+    dirn = rnd.choice(DIR_VOCAB)
+    sub  = rnd.choice(["steps","tasks","bin"])
+    v    = rnd.choice(VERBS)
+    tgt  = root / dirn / sub / f"{v}.ps1"
+
+    write(tgt, f"Write-Host \"{rnd.choice(ECHOES)}\"\n# {salted(rnd,'ps-tgt')}\n")
+    write(env,
+          "$BASE = Join-Path $PSScriptRoot '{0}'\n$REL = '{1}'\n$NAME = '{2}.ps1'\n# {3}\n"
+          .format(dirn, sub, v, salted(rnd,'ps-env')))
+
+    body = (
+        ". ./Env.ps1\n"
+        "$D1 = Join-Path $BASE $REL\n"
+        "$Full = Join-Path $D1 $NAME\n"
+        "& $Full\n"
+        f"# {salted(rnd,'ps-run')}\n"
+    )
+    write(run, body)
+    src = canon(run, root, windows); dst = canon(tgt, root, windows)
+    feats = {"dot-sourcing","var-indirection","multi-hop"}
+    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": "& $Full"}], [run], feats
+
 def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_hashes: set, min_hard_features: int):
     windows = platform in ("windows","mixed") and (platform=="windows" or rnd.random()<0.5)
     # pattern library
@@ -296,7 +423,10 @@ def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_ha
         mk_ps_dotsource,
         mk_ps_var_dotsource,
         mk_cmd_chain_vars,
-        mk_ps_amp_invoke_var
+        mk_ps_amp_invoke_var,
+        mk_shell_multi_chain,
+        mk_cmd_multi_chain,
+        mk_ps_multi_chain,
     ]
     maker = rnd.choice(makers_hard if hard else makers_easy)
 
@@ -321,6 +451,19 @@ def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_ha
                     # fall through with whatever we have after several tries
                     pass
                 continue
+        noise_dirs  = globals().get("_noise_dirs", 0)
+        noise_files = globals().get("_noise_files", 0)
+        noise_scope = globals().get("_noise_scope", "none")
+
+        if noise_dirs > 0 and noise_files > 0:
+            inject = (
+                noise_scope == "all" or
+                (noise_scope == "hard" and hard) or
+                (noise_scope == "easy" and not hard)
+            )
+            if inject:
+                add_noise(root, rnd, dirs=noise_dirs, files_per_dir=noise_files)
+
         # fingerprint all file contents
         buf = []
         for p in sorted(root.rglob("*")):
@@ -343,10 +486,28 @@ def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_ha
     (root).mkdir(parents=True, exist_ok=True)
     write(root/"seeds.txt", "\n".join([p.name for p in seeds]) + "\n")
     truth = {"nodes": sorted(nodes), "edges": edges}
-    write(root/"truth.yaml", textwrap.dedent(
-        "nodes:\n" + "".join([f"  - {n}\n" for n in truth["nodes"]]) +
-        "edges:\n" + "".join([f"  - src: {e['src']}\n    dst: {e['dst']}\n    kind: {e['kind']}\n    dge: {e['dge']}\n" for e in truth["edges"]])
-    ))
+    write(
+        root / "truth.yaml",
+        textwrap.dedent(
+            "nodes:\n"
+            + "".join([f"  - {json.dumps(n)}\n" for n in truth["nodes"]])
+            + "edges:\n"
+            + "".join(
+                [
+                    "  - src: {src}\n"
+                    "    dst: {dst}\n"
+                    "    kind: {kind}\n"
+                    "    dge: {dge}\n".format(
+                        src=json.dumps(e["src"]),
+                        dst=json.dumps(e["dst"]),
+                        kind=json.dumps(e["kind"]),
+                        dge=json.dumps(e["dge"]),
+                    )
+                    for e in truth["edges"]
+                ]
+            )
+        ),
+    )
     meta = {
         "platform": "windows" if windows else "linux",
         "hard": hard,
@@ -365,7 +526,17 @@ def main():
     ap.add_argument("--platform", choices=["linux","windows","mixed"], default="mixed")
     ap.add_argument("--min-hard-features", type=int, default=2,
                     help="minimum number of difficulty features required for a hard bundle")
+    ap.add_argument("--noise-dirs",  type=int, default=0, help="number of decoy subdirectories per bundle")
+    ap.add_argument("--noise-files", type=int, default=0, help="number of decoy scripts per decoy directory")
+    ap.add_argument("--noise-scope", choices=["none","hard","easy","all"], default="hard", help="which bundle kinds receive decoy noise")
     args = ap.parse_args()
+
+    # expose for mk_bundle
+    global _noise_dirs, _noise_files, _noise_scope
+    _noise_dirs = int(args.noise_dirs)
+    _noise_files = int(args.noise_files)
+    _noise_scope = str(args.noise_scope)
+
     rnd = random.Random(args.seed)
     base = Path(args.out)/args.kind
     seen = set()

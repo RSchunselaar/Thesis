@@ -1,10 +1,11 @@
 {
-  "platform": "linux",
+  "platform": "windows",
   "hard": true,
-  "pattern": "mk_cmd_for_loop",
+  "pattern": "mk_shell_multi_chain",
   "features": [
-    "delayed-expansion",
-    "for-loop",
+    "dot-sourcing",
+    "interpreter-hop-bash",
+    "multi-hop",
     "var-indirection"
   ]
 }

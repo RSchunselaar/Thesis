@@ -161,6 +161,27 @@ def analyze(df: pd.DataFrame, metric_key: str, alpha: float, n_boot: int, seed: 
         lines.append(f"| {r} | {x.size} | {np.mean(x):.3f} | {np.median(x):.3f} | {np.std(x, ddof=1):.3f} | {np.min(x):.3f} | {np.max(x):.3f} |")
     lines.append("")
 
+    # --- (optional) latency summary if present ---
+    if "lat_total_ms" not in df.columns:
+        # flatten latency dict if present in rows
+        if "latency" in df.columns:
+            # already flattened by caller; skip
+            pass
+        else:
+            # nothing to do
+            pass
+    else:
+        lines.append("## Per-system runtime (total ms)")
+        lines.append("| System | N | Mean | Median | Std | Min | Max |")
+        lines.append("|:--|--:|--:|--:|--:|--:|--:|")
+        for r in roles:
+            x = pivot.join(df[df["role"]==r].set_index("bundle")["lat_total_ms"], how="left")["lat_total_ms"].dropna().to_numpy()
+            if x.size == 0:
+                lines.append(f"| {r} | 0 |  |  |  |  |  |")
+                continue
+            lines.append(f"| {r} | {x.size} | {np.mean(x):.1f} | {np.median(x):.1f} | {np.std(x, ddof=1):.1f} | {np.min(x):.1f} | {np.max(x):.1f} |")
+        lines.append("")
+
     # Pairwise tests
     lines.append("## Pairwise comparisons (paired, two-sided)")
     header = "| A vs B | N | mean(B-A) | t | p_t | W | p_w | p_t_adj | p_w_adj | Cohen_dz | r_rb | win_rate(B>A) | 95% CI mean(B-A) |"
@@ -268,6 +289,14 @@ def main():
             if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
                 rec[k] = float(v)
         recs.append(rec)
+
+        lat = r.get("latency") or {}
+        if isinstance(lat, dict):
+            rec["lat_total_ms"]   = float(lat.get("total")) if lat.get("total") is not None else np.nan
+            rec["lat_reader_ms"]  = float(lat.get("Reader")) if lat.get("Reader") is not None else np.nan
+            rec["lat_mapper_ms"]  = float(lat.get("Mapper")) if lat.get("Mapper") is not None else np.nan
+            rec["lat_writer_ms"]  = float(lat.get("Writer")) if lat.get("Writer") is not None else np.nan
+            rec["lat_planner_ms"] = float(lat.get("Planner")) if lat.get("Planner") is not None else np.nan
 
     if not recs:
         sys.exit("No usable records found (missing bundle/role/score).")

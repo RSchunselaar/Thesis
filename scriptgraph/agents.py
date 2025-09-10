@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple, Optional
@@ -11,6 +12,7 @@ from .exporter import write_artifacts
 from .scanner import Scanner
 from .llm_adapter import LLMClient, LLMConfig
 from typing import Any
+
 
 # Optional redactor (safe if missing)
 try:
@@ -25,7 +27,8 @@ class ReadManifest:
     files: list[dict]                 # [{"path": "run.sh", "priority": 100, "peek": [(0, 4096)]}, ...]
     env_hints: dict[str, str]         # seed env (global)
     policy: dict[str, Any]            # normalization policy
-    budget: dict[str, int]            # {"max_tool_calls": 50, "max_latency_ms": 60000}
+    budget: dict[str, int]            # {"max_tool_calls": 50, "max_latency_ms": 60000, "max_loops": 1, "max_files": 0}
+    worklist: list[str] = field(default_factory=list)            # NEW: prioritized sources to read first
 
 @dataclass
 class ObservationBatch:
@@ -105,6 +108,17 @@ def _norm_path(p: str) -> str:
     if p.startswith("./"): p = p[2:]
     while "//" in p: p = p.replace("//", "/")
     return p
+
+def _write_run_stats(out_dir: Path, roles: str, lat_ms: dict[str, float], g: Graph, unresolved: list[dict]) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "system": roles,
+        "latency_ms": {k: int(v) for k, v in lat_ms.items()},  # ints for easy CSV/plots
+        "nodes": len(g.nodes),
+        "edges": len(g.edges),
+        "unresolved": len(unresolved),
+    }
+    (out_dir / "run_stats.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 # -------------------- LLM wrappers --------------------
 
@@ -197,7 +211,42 @@ class Planner:
                         seeds.add(s)
                 except Exception:
                     pass
-        return seeds    
+        return seeds
+
+    def _build_worklist(self, io: RoleIO, files: list[str]) -> list[str]:
+        # Start with seeds and obvious entry points
+        seeds = self._load_seeds(io.root)
+        seeds = {s for s in seeds if s in files}
+        entry = {f for f in files if f.rsplit("/", 1)[-1].lower() in {"run.sh", "run.cmd", "run.bat", "start.cmd", "main.bat"}}
+        wl = list(seeds | entry)
+
+        # Add sources that *contain* dynamic unresolved edges in the static graph
+        dyn_sources = []
+        try:
+            for e in getattr(io, "graph", Graph()).edges:
+                if e.dynamic and not e.resolved and e.src in files:
+                    dyn_sources.append(e.src)
+        except Exception:
+            pass
+        # keep stable but unique
+        seen = set(wl)
+        for s in dyn_sources:
+            if s not in seen:
+                wl.append(s); seen.add(s)
+
+        # Optional: ask LLM to re-rank based on unresolved commands (if available)
+        if self.client:
+            pairs = [(e.src, e.command or "") for e in getattr(io, "graph", Graph()).edges if e.dynamic and not e.resolved]
+            ordered, _ = _llm_plan(self.client, pairs)
+            if ordered:
+                # keep only those that exist and precede others
+                ordered = [s for s in ordered if s in files]
+                # stable merge: ordered first, then the rest of wl
+                left = [s for s in ordered if s not in set(wl)]
+                wl = ordered + [s for s in wl if s not in set(ordered)]
+
+        # cap size (a planner shouldn't create a huge list)
+        return wl[:200]        
 
     def run(self, io: RoleIO, budget: dict | None = None) -> ReadManifest:
         root = io.root
@@ -222,14 +271,16 @@ class Planner:
         # seed env hints (global)
         env_hints = {}
         # budget defaults (can pass from config later)
-        budget = budget or {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1}
+        budget = budget or {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1, "max_files": 60}
 
         # build manifest
+        worklist = self._build_worklist(io, files)
         manifest = ReadManifest(
             files=[{"path": f, "priority": prio[f], "peek": [(0, 4096)]} for f in files],
-            env_hints=env_hints,
+            env_hints={},
             policy=policy,
             budget=budget,
+            worklist=worklist,   
         )
         if self.logger:
             self.logger.log("INFO", f"Planner: indexed {len(manifest.files)} files; budget={manifest.budget}")
@@ -249,8 +300,9 @@ class Planner:
             if env_hints:
                 c.executemany("INSERT INTO env_hints VALUES (?,?,?)",
                               [(self.logger.run_id, k, v) for k, v in env_hints.items()])
+            c.execute("CREATE TABLE IF NOT EXISTS plan_worklist(run_id INT, path TEXT)")
+            c.executemany("INSERT INTO plan_worklist VALUES (?,?)", [(self.logger.run_id, p) for p in worklist])
             c.commit()
-
         return manifest
 
 
@@ -344,7 +396,24 @@ class Reader:
         files_meta, env_vars, call_sites = [], [], []
         total = len(manifest.files)
 
-        for i, it in enumerate(sorted(manifest.files, key=lambda x: -x["priority"])):
+        # --- NEW: ordering & budget enforcement ---
+        wl = set(getattr(manifest, "worklist", []) or [])
+        max_files = int((manifest.budget or {}).get("max_files", 0) or 0)
+
+        # Reorder: (1) in worklist, (2) by priority desc, (3) lexicographically for stability
+        ordered = sorted(
+            manifest.files,
+            key=lambda it: (
+                0 if it["path"] in wl else 1,
+                -int(it.get("priority", 0)),
+                it["path"]
+            )
+        )
+        # Enforce budget if set
+        if max_files > 0 and len(ordered) > max_files:
+            ordered = ordered[:max_files]
+
+        for i, it in enumerate(ordered):
             rel = it["path"]
             path = io.root / rel
             lang = self._lang(rel)
@@ -508,8 +577,8 @@ class Mapper:
             for k, v in env.items():
                 vv = (v or "").strip().strip('"').strip("'")
                 # Windows CMD
-                out = out.replace(f"%{k}%", vv)
-                out = out.replace(f"!{k}!", vv)
+                out = re.sub(rf"%{re.escape(k)}%", vv, out, flags=re.I)
+                out = re.sub(rf"!{re.escape(k)}!", vv, out, flags=re.I)
                 # POSIX / PS
                 out = out.replace(f"${{{k}}}", vv).replace(f"${k}", vv)
             if out == prev:
@@ -570,17 +639,45 @@ class Mapper:
         g = Graph()
         unresolved: list[dict] = []
 
-        # seed nodes with discovered files
-        for f in obs.files: g.add_node(f["path"])
         # carry over STATIC edges from the initial scan (never regress on static)
         for e in getattr(io, "graph", Graph()).edges:
             if not e.dynamic:
                 g.add_edge(e)
 
+        static_sources = {}
+        for e in getattr(io, "graph", Graph()).edges:
+            if (not e.dynamic) and e.kind == "source":
+                static_sources.setdefault(e.src, []).append(e.dst)
+
+        def env_for(src: str) -> dict[str,str]:
+            # local vars
+            env = {v["name"]: v["value"] for v in obs.env_vars if v["scope"] == src}
+            # one-hop import from statically-sourced files
+            for t in static_sources.get(src, []):
+                for v in obs.env_vars:
+                    if v["scope"] == t and v["name"] not in env:
+                        env[v["name"]] = v["value"]
+            return env
+
         # Allowed list for LLM prompt + Python-side guard
         allowed_set = {_norm_path(f["path"]) for f in obs.files}
-        allowed_list = sorted(allowed_set)  # JSON-serializable
+        windowsish = any(p.lower().endswith((".cmd", ".bat", ".ps1")) for p in allowed_set)
+        def _canon_case(p: str) -> str:
+            return p.lower() if windowsish else p
+
+        # carry over static edges, canonicalized
+        for e in getattr(io, "graph", Graph()).edges:
+            if not e.dynamic:
+                g.add_edge(Edge(
+                    src=_canon_case(e.src), dst=_canon_case(e.dst),
+                    kind=e.kind, command=e.command,
+                    dynamic=e.dynamic, resolved=e.resolved,
+                    confidence=e.confidence, reason=e.reason
+                ))
         
+        allowed_lower = {p.lower() for p in allowed_set}
+        allowed_list = sorted(allowed_set)
+
         seen: set[tuple[str, str, str]] = set()
         resolved = 0
         nonresolved = 0
@@ -589,7 +686,7 @@ class Mapper:
         for idx, cs in enumerate(obs.call_sites, 1):
             src = cs["src"]; raw = cs["raw"]; kind = cs["kind"]
             cmd = cs.get("cmd") or f"{kind} {raw}"
-            env = self._env_for_src(obs, src)
+            env = env_for(src)
 
             # --- IMPORTANT: skip static call-sites ---
             # Static (non-dynamic) edges were already captured by the Scanner and
@@ -609,7 +706,7 @@ class Mapper:
                     cand = data.get("targets") or []
                     if isinstance(cand, list):
                         targets = [_norm_path(t) for t in cand if isinstance(t, str)]
-                        targets = [t for t in targets if t in allowed_set]
+                        targets = [t for t in targets if (t in allowed_set) or (windowsish and t.lower() in allowed_lower)]
                     why = (data.get("reasoning") or "").strip()
                     if self.logger:
                         self.logger.log_llm(role="mapper", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
@@ -641,7 +738,7 @@ class Mapper:
                         cand2 = data2.get("targets") or []
                         if isinstance(cand2, list):
                             targets = [_norm_path(t) for t in cand2 if isinstance(t, str)]
-                            targets = [t for t in targets if t in allowed_set]
+                            targets = [t for t in targets if (t in allowed_set) or (windowsish and t.lower() in allowed_lower)]
                         why = (data2.get("reasoning") or "").strip() or why
                         if self.logger:
                             self.logger.log_llm(role="mapper", model=str(meta2.get("model","")), endpoint=str(meta2.get("endpoint","")),
@@ -664,19 +761,31 @@ class Mapper:
                     targets = [t]
                     why = "local var substitution"
 
+            provenance = {"static_carryover": 0, "llm": 0, "heuristic": 0}
+            src_c = _canon_case(src)
+
             if targets:
                 resolved += 1
+                if why.startswith("local var substitution"):
+                    provenance["heuristic"] += 1
+                elif why:
+                    provenance["llm"] += 1
+                else:
+                    provenance["static_carryover"] += 1
+
                 for t in targets:
-                    key = (src, t, kind)
+                    t_c = _canon_case(t)
+                    key = (src_c, t_c, kind)
                     if key in seen:
                         continue
                     seen.add(key)
-                    g.add_edge(Edge(src=src, dst=t, kind=kind, command=cmd,
-                                    dynamic=bool(cs.get("dynamic", 0)), resolved=True, confidence=0.7, reason=why or None))
+                    g.add_edge(Edge(src=src_c, dst=t_c, kind=kind, command=cmd,
+                        dynamic=bool(cs.get("dynamic", 0)),
+                        resolved=True, confidence=0.7, reason=why or None))
             else:
                 nonresolved += 1
                 g.add_node(src)
-                unresolved.append({"src": src, "raw_target": raw, "reason": "no-targets-from-LLM"})
+                unresolved.append({"src": src_c, "raw_target": raw, "reason": "no-targets-from-LLM"})
             if self.logger and (idx % 10 == 0 or idx == total):
                 self.logger.log("INFO", f"Mapper: processed {idx}/{total}; "
                                 f"resolved={resolved} unresolved={nonresolved}")
@@ -765,37 +874,62 @@ class AgentRunner:
         io = RoleIO(root=Path(root_dir).resolve(), graph=base_graph)
         planner = Planner(self.client, self.logger)
         reader  = Reader(self.client, self.logger, log_prompts=self.log_prompts, use_llm_hints=self.use_llm_reader_hints, redactor=self._redactor)
-        # if egress is off or provider is disabled, allow heuristic fallback
         allow_fallback = (self.client.cfg.provider == "disabled")
-        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=allow_fallback, log_prompts=self.log_prompts, redactor=self._redactor)  # LLM-first
+        mapper  = Mapper(self.client, self.logger, use_heuristic_fallback=allow_fallback, log_prompts=self.log_prompts, redactor=self._redactor)
         writer  = Writer(self.client, self.logger)
 
         # Budget (could come from cfg)
-        budget = {"max_tool_calls": 100, "max_latency_ms": 60000, "max_loops": 1}
+        def _env_int(name: str, default: int) -> int:
+            try:
+                v = os.environ.get(name)
+                return int(v) if (v is not None and str(v).strip() != "") else default
+            except Exception:
+                return default
 
-        import time
+        budget = {
+            "max_tool_calls": _env_int("SG_MAX_TOOL_CALLS", 100),
+            "max_latency_ms": _env_int("SG_MAX_LAT_MS", 60000),
+            "max_loops":      _env_int("SG_MAX_LOOPS", 1),
+            "max_files":      _env_int("SG_MAX_FILES", 60)
+        }
+
+        run_t0 = time.monotonic()
+        lat_ms: dict[str, float] = {}
+
         if self.roles == "4R":
             t0 = time.monotonic()
             manifest = planner.run(io, budget=budget)
+            reader.use_llm_hints = bool(manifest.policy.get("llm_reader_hints", reader.use_llm_hints))
+            lat_ms["Planner"] = (time.monotonic() - t0) * 1000.0
             try:
                 manifest.policy["llm_reader_hints"] = bool(self.use_llm_reader_hints)
             except Exception:
-                pass 
-            self.logger.log_role_latency("Planner", time.monotonic()-t0)
-            t0 = time.monotonic(); obs      = reader.run(io, manifest);       self.logger.log_role_latency("Reader",  time.monotonic()-t0)
-            t0 = time.monotonic(); snap     = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
+                pass
+
+            t0 = time.monotonic()
+            obs = reader.run(io, manifest)
+            lat_ms["Reader"] = (time.monotonic() - t0) * 1000.0
+
+            t0 = time.monotonic()
+            snap = mapper.run(io, obs, manifest.policy)
+            lat_ms["Mapper"] = (time.monotonic() - t0) * 1000.0
         else:  # "2R": Reader -> Mapper only
             pl = Planner(self.client, self.logger)
             files = pl._light_crawl(io.root)
             seeds = pl._load_seeds(io.root)
-            # Minimal manifest for Reader (honor seeds)
             flist = []
             for pth in files:
                 pr = 500 if pth in seeds else 10
                 flist.append({"path": pth, "priority": pr, "peek":[(0,4096)]})
-            manifest = ReadManifest(files=flist, env_hints={}, policy={"workdir":"."}, budget=budget)
-            t0 = time.monotonic(); obs  = reader.run(io, manifest);            self.logger.log_role_latency("Reader",  time.monotonic()-t0)
-            t0 = time.monotonic(); snap = mapper.run(io, obs, manifest.policy); self.logger.log_role_latency("Mapper",  time.monotonic()-t0)
+            manifest = ReadManifest(files=flist, env_hints={}, policy={"workdir":"."}, budget=budget, worklist=[])
+
+            t0 = time.monotonic()
+            obs  = reader.run(io, manifest)
+            lat_ms["Reader"] = (time.monotonic() - t0) * 1000.0
+
+            t0 = time.monotonic()
+            snap = mapper.run(io, obs, manifest.policy)
+            lat_ms["Mapper"] = (time.monotonic() - t0) * 1000.0
 
         # Optional extra loop if many unresolved (bounded)
         if snap.unresolved and budget["max_loops"] > 0:
@@ -806,16 +940,29 @@ class AgentRunner:
                 if it["path"] in promote:
                     it["peek"] = [(0, 8192)]  # read twice as much
                     it["priority"] = 200
-            obs2  = reader.run(io, manifest)
-            snap  = mapper.run(io, obs2, manifest.policy)
+            t0 = time.monotonic()
+            obs2 = reader.run(io, manifest)
+            lat_ms["Reader_loop2"] = lat_ms.get("Reader_loop2", 0.0) + (time.monotonic() - t0) * 1000.0
+
+            t0 = time.monotonic()
+            snap = mapper.run(io, obs2, manifest.policy)
+            lat_ms["Mapper_loop2"] = lat_ms.get("Mapper_loop2", 0.0) + (time.monotonic() - t0) * 1000.0
 
         outp = Path(out_dir)
+        # Export graph
         if self.roles == "4R":
-            writer.run(io, outp, snap)               # Writer uses shared Exporter + optional LLM bullets
+            t0 = time.monotonic()
+            writer.run(io, outp, snap)
+            lat_ms["Writer"] = (time.monotonic() - t0) * 1000.0
         else:
-            # 2R: reuse Exporter directly (no LLM bullets)
             write_artifacts(root=io.root, out_dir=outp, graph=snap.graph,
                             coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger)
+
+        lat_ms["total"] = (time.monotonic() - run_t0) * 1000.0
+
+        # Persist lightweight run stats for bench.ps1
+        _write_run_stats(outp, self.roles, lat_ms, snap.graph, snap.unresolved)
+
         return snap.graph
 
 def llm_from_config(cfg) -> LLMClient:

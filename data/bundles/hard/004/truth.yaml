@@ -1,8 +1,8 @@
 nodes:
-  - run.sh
-  - tools/worker.py
+  - "pipes/bin/archive.ps1"
+  - "run.ps1"
 edges:
-  - src: run.sh
-    dst: tools/worker.py
-    kind: call
-    dge: $INTERP "$TARGET"
+  - src: "run.ps1"
+    dst: "pipes/bin/archive.ps1"
+    kind: "call"
+    dge: "& $Full"

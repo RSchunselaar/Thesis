@@ -1,8 +1,8 @@
 nodes:
-  - mods/filter.sh
-  - run.sh
+  - "mods/filter.sh"
+  - "run.sh"
 edges:
-  - src: run.sh
-    dst: mods/filter.sh
-    kind: call
-    dge: ./mods/filter.sh
+  - src: "run.sh"
+    dst: "mods/filter.sh"
+    kind: "call"
+    dge: "./mods/filter.sh"

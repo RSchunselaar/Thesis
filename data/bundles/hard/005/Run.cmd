@@ -1,5 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
-set D=steps
-for %%F in (step.cmd) do set T=!D!\%%F
-call "!T!"
+set D1=bin
+set D2=!D1!\core
+set NAME=step.cmd
+for %%F in (!NAME!) do set TARGET=!D2!\%%F
+call "!TARGET!"
