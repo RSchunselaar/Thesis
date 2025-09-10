@@ -314,7 +314,7 @@ class Reader:
         self.use_llm_hints = bool(use_llm_hints)
         self._redactor = redactor or Redactor()
         self._rx_env_sh  = re.compile(
-            r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$',
+            r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([A-Za-z0-9_./${}-]+)["\']?\s*$',
             re.M
         )
         self._rx_env_cmd_any = re.compile(
@@ -333,6 +333,10 @@ class Reader:
         self._rx_dyn_sh  = re.compile(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|`|\$\(|\beval\b')
         self._rx_dyn_cmd = re.compile(r'%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!')
         self._rx_dyn_ps1 = re.compile(r'(?<!\w)\$[A-Za-z_]\w*|\$\(|Join-Path|Resolve-Path|Invoke-Expression')
+        self._rx_ps_assign_str  = re.compile(r'^\s*\$([A-Za-z_]\w*)\s*=\s*[\'"]([A-Za-z0-9_./\\-]+)[\'"]\s*$', re.M)
+        self._rx_ps_assign_join = re.compile(r'(?i)^\s*\$([A-Za-z_]\w*)\s*=\s*Join-Path\s+([^\s;]+)\s+([^\s;]+)')
+        self._rx_call_sh_interp_var = re.compile(r'^\s*\$[A-Za-z_][A-Za-z0-9_]*\s+(?P<target>["\']?\$[A-Za-z_][A-Za-z0-9_]*["\']?)')
+
 
     def _lang(self, p: str) -> str:
         p=p.lower()
@@ -431,7 +435,12 @@ class Reader:
             if lang == "sh":
                 # 1) env vars (coarse but effective)
                 for m in self._rx_env_sh.finditer(text):
-                    env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
+                     # avoid capturing values with command substitution/backticks
+                     val = m.group(2)
+                     if "(" in val or "`" in val:
+                         continue
+                     env_vars.append({"scope": rel, "name": m.group(1), "value": val, "prec": 10})
+
 
                 # 2) optional LLM reader hints
                 if self.use_llm_hints and self.client and text.strip():
@@ -465,6 +474,18 @@ class Reader:
                         "line": 0, "col": 0, "span": [0,0],
                         "dynamic": 1 if self._is_dynamic_sh(full) else 0, "conf": 0.7
                     })
+                # interpreter var + target var  (e.g., $INTERP "$TARGET")
+                for raw in text.splitlines():
+                    mi = self._rx_call_sh_interp_var.search(raw)
+                    if mi:
+                        tgt = mi.group("target")
+                        if not self._plausible_target(tgt):
+                            continue
+                        call_sites.append({
+                            "src": rel, "raw": tgt, "cmd": raw.strip(), "kind": "call",
+                            "line": 0, "col": 0, "span": [0,0], "dynamic": 1, "conf": 0.7
+                        })
+
                 for raw in text.splitlines():
                     m = self._rx_call_sh_var.search(raw)
                     if not m:
@@ -518,6 +539,33 @@ class Reader:
                 # (optional) LLM reader hints for CMD are rarely needed; omit by default
 
             elif lang == "ps1":
+                # 0) simple PS variable assignments
+                ps_locals: dict[str, str] = {}
+                for line in text.splitlines():
+                    ms = self._rx_ps_assign_str.match(line)
+                    if ms:
+                        name, val = ms.group(1), ms.group(2)
+                        val = _norm_path(val)
+                        ps_locals[name] = val
+                        env_vars.append({"scope": rel, "name": name, "value": val, "prec": 10})
+                        continue
+                    mj = self._rx_ps_assign_join.match(line)
+                    if mj:
+                        dest, a, b = mj.group(1), mj.group(2).strip(), mj.group(3).strip()
+                        def _tok(t: str) -> Optional[str]:
+                            if t.startswith(("'", '"')) and t.endswith(("'", '"')):
+                                return _norm_path(t.strip("'\""))
+                            if t.startswith("$"):
+                                nm = t[1:]
+                                if nm.upper() == "PSSCRIPTROOT": return "."
+                                return ps_locals.get(nm)
+                            return _norm_path(t)
+                        a1, b1 = _tok(a), _tok(b)
+                        if a1 and b1:
+                            val = _norm_path(f"{a1.rstrip('/')}/{b1.lstrip('/')}")
+                            ps_locals[dest] = val
+                            env_vars.append({"scope": rel, "name": dest, "value": val, "prec": 9})
+
                 # PowerShell call sites and dynamic markers
                 for m in self._rx_call_ps1.finditer(text):
                     full = m.group(0).strip()
@@ -633,16 +681,33 @@ class Mapper:
             pass
         dirs = self._extract_dirs(src, raw, env, allowed_set)
         return {"src_snippet": snippet, "dir_listings": self._list_candidates(allowed_set, dirs)}
-     
+
+    def _ps_eval_joins(self, io: RoleIO, src: str, env: dict[str,str]) -> dict[str,str]:
+        """Evaluate simple Join-Path assignments in a PS1 file using current env."""
+        try:
+            text = (io.root / src).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return env
+        rx = re.compile(r'(?i)^\s*\$([A-Za-z_]\w*)\s*=\s*Join-Path\s+([^\s;]+)\s+([^\s;]+)', re.M)
+        def tok(t: str) -> Optional[str]:
+            t = t.strip()
+            if t.startswith(("'", '"')) and t.endswith(("'", '"')):
+                return _norm_path(t.strip("'\""))
+            if t.startswith("$"):
+                nm = t[1:]
+                if nm.upper() == "PSSCRIPTROOT": return "."
+                return env.get(nm)
+            return _norm_path(t)
+        for m in rx.finditer(text):
+            dest, a, b = m.group(1), m.group(2), m.group(3)
+            a1, b1 = tok(a), tok(b)
+            if a1 and b1:
+                env[dest] = _norm_path(f"{a1.rstrip('/')}/{b1.lstrip('/')}")
+        return env
 
     def run(self, io: RoleIO, obs: ObservationBatch, policy: dict) -> GraphSnapshot:
         g = Graph()
         unresolved: list[dict] = []
-
-        # carry over STATIC edges from the initial scan (never regress on static)
-        for e in getattr(io, "graph", Graph()).edges:
-            if not e.dynamic:
-                g.add_edge(e)
 
         static_sources = {}
         for e in getattr(io, "graph", Graph()).edges:
@@ -657,19 +722,46 @@ class Mapper:
                 for v in obs.env_vars:
                     if v["scope"] == t and v["name"] not in env:
                         env[v["name"]] = v["value"]
+            # derive PS Join-Path assignments at call site using imported vars
+            if src.lower().endswith(".ps1"):
+                env = self._ps_eval_joins(io, src, env)
             return env
 
-        # Allowed list for LLM prompt + Python-side guard
-        allowed_set = {_norm_path(f["path"]) for f in obs.files}
-        windowsish = any(p.lower().endswith((".cmd", ".bat", ".ps1")) for p in allowed_set)
+        # Allowed list for LLM prompt + Python-side guard: FULL project index (not only peeked files)
+        ALLOWED_EXTS = (".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py")
+        allowed_set: set[str] = set()
+        for ext in ALLOWED_EXTS:
+            for p in io.root.rglob(f"*{ext}"):
+                try:
+                    rel = p.relative_to(io.root).as_posix()
+                    allowed_set.add(_norm_path(rel))
+                except Exception:
+                    pass
+ 
+        # Decide case policy from bundle meta.json
+        windowsish = False
+        try:
+            meta = json.loads((io.root / "meta.json").read_text(encoding="utf-8"))
+            windowsish = str(meta.get("platform","")).lower() == "windows"
+        except Exception:
+            pass
         def _canon_case(p: str) -> str:
             return p.lower() if windowsish else p
+        ALLOWED_PREFIXES = (". ", "source ", "& ", "call ", "start ", "bash ", "sh ", "ksh ", "python ", "python3 ", "perl ")
 
-        # carry over static edges, canonicalized
+        # carry over static edges, canonicalized, with sanity filters
         for e in getattr(io, "graph", Graph()).edges:
             if not e.dynamic:
+                cmd = (getattr(e, "command", "") or "").strip().lower()
+                dst_c = _canon_case(e.dst)
+                # Keep only if destination exists in our index (case-aware)
+                if not ((dst_c in allowed_set) or (windowsish and dst_c in {p.lower() for p in allowed_set})):
+                    continue
+                # If we have a command string, require it to look like a real invocation
+                if cmd and not any(cmd.startswith(pfx) for pfx in ALLOWED_PREFIXES):
+                    continue
                 g.add_edge(Edge(
-                    src=_canon_case(e.src), dst=_canon_case(e.dst),
+                    src=_canon_case(e.src), dst=dst_c,
                     kind=e.kind, command=e.command,
                     dynamic=e.dynamic, resolved=e.resolved,
                     confidence=e.confidence, reason=e.reason

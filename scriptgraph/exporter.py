@@ -25,17 +25,17 @@ def write_artifacts(*, root: Path, out_dir: Path, graph: Graph, coverage: dict, 
         pass
     # YAML export
     nodes = sorted({ _canon_rel(n, root, windows) for n in graph.nodes.keys() })
-    lines = ["nodes:\n"] + [f"  - {n}\n" for n in nodes]
+    lines = ["nodes:\n"] + [f"  - {json.dumps(n)}\n" for n in nodes]
     lines.append("edges:\n")
     for e in graph.edges:
         src = _canon_rel(e.src, root, windows)
         dst = _canon_rel(e.dst, root, windows)
-        lines += [f"  - src: {src}\n", f"    dst: {dst}\n", f"    kind: {e.kind}\n"]
-        if getattr(e, "command", None):   lines.append(f"    command: {e.command}\n")
+        lines += [f"  - src: {json.dumps(src)}\n", f"    dst: {json.dumps(dst)}\n", f"    kind: {json.dumps(e.kind)}\n"]
+        if getattr(e, "command", None):   lines.append(f"    command: {json.dumps(e.command)}\n")
         if getattr(e, "dynamic", None) is not None:   lines.append(f"    dynamic: {str(bool(e.dynamic)).lower()}\n")
         if getattr(e, "resolved", None) is not None:  lines.append(f"    resolved: {str(bool(e.resolved)).lower()}\n")
         if getattr(e, "confidence", None) is not None: lines.append(f"    confidence: {float(e.confidence):.3f}\n")
-        if getattr(e, "reason", None):    lines.append(f"    reason: {e.reason}\n")
+        if getattr(e, "reason", None):    lines.append(f"    reason: {json.dumps(e.reason)}\n")
     (out_dir / "predicted_graph.yaml").write_text("".join(lines), encoding="utf-8")
     (out_dir / "graph.dot").write_text(graph.to_dot(), encoding="utf-8")
     (out_dir / "run_report.json").write_text(json.dumps({

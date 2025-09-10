@@ -343,7 +343,12 @@ bash "$TARGET"
     write(run, body)
     src = canon(run, root, windows); dst = canon(target, root, windows)
     feats = {"dot-sourcing","var-indirection","interpreter-hop-bash","multi-hop"}
-    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": 'bash "$TARGET"'}], [run], feats
+    # include the dot-source dependency in ground truth
+    edges = [
+        {"src": src, "dst": canon(env, root, windows), "kind": "source", "dge": ". ./etc/env.sh"},
+        {"src": src, "dst": dst, "kind": "call",   "dge": 'bash "$TARGET"'},
+    ]
+    return {src, dst, canon(env, root, windows)}, edges, [run], feats
 
 
 def mk_cmd_multi_chain(root: Path, windows: bool, rnd: random.Random):
@@ -403,7 +408,12 @@ def mk_ps_multi_chain(root: Path, windows: bool, rnd: random.Random):
     write(run, body)
     src = canon(run, root, windows); dst = canon(tgt, root, windows)
     feats = {"dot-sourcing","var-indirection","multi-hop"}
-    return {src, dst}, [{"src": src, "dst": dst, "kind": "call", "dge": "& $Full"}], [run], feats
+    # include the dot-source dependency in ground truth
+    edges = [
+        {"src": src, "dst": canon(env, root, windows), "kind": "source", "dge": dge_ps_source("./Env.ps1")},
+        {"src": src, "dst": dst, "kind": "call", "dge": "& $Full"},
+    ]
+    return {src, dst, canon(env, root, windows)}, edges, [run], feats
 
 def mk_bundle(root: Path, hard: bool, platform: str, rnd: random.Random, seen_hashes: set, min_hard_features: int):
     windows = platform in ("windows","mixed") and (platform=="windows" or rnd.random()<0.5)
