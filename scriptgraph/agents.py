@@ -261,12 +261,26 @@ class Reader:
         self.log_prompts = bool(log_prompts)
         self.use_llm_hints = bool(use_llm_hints)
         self._redactor = redactor or Redactor()
-        self._rx_env_sh  = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$', re.M)
-        self._rx_env_cmd = re.compile(r'^\s*set\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$', re.M)
-        self._rx_call_sh = re.compile(r'(?P<kind>(?:\.|source|bash|sh|ksh|python|python3|perl)\s+)(?P<target>[^\s;]+)')
+        self._rx_env_sh  = re.compile(
+            r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?([\w./-]+)["\']?\s*$',
+            re.M
+        )
+        self._rx_env_cmd_any = re.compile(
+            r'(?i)\bset(?!\s*local)\s+([A-Za-z_][A-Za-z0-9_]*)=(.+?)\s*(?:&|$)'
+        )
+        self._rx_cmd_for_in = re.compile(
+            r'(?i)\bfor\s+%%(?P<var>[A-Za-z])\s+in\s*\((?P<val>[^)]+)\)'
+        )
+
+        self._rx_call_sh = re.compile(
+            r'(?P<kind>(?:\.|source|bash|sh|ksh|python|python3|perl)\s+)(?P<target>[^\s;]+)'
+        )
         self._rx_call_sh_var = re.compile(r'^\s*(?P<target>["\']?\$[A-Za-z_][A-Za-z0-9_]*["\']?)(?:\s|$)')
-        self._rx_call_cmd = re.compile(r'\b(?P<kind>call|start)\s+(?P<target>[^\s&]+)', re.I)
+        self._rx_call_cmd = re.compile(r'(?i)\b(?P<kind>call|start)\s+(?P<target>[^\s&]+)')
         self._rx_call_ps1 = re.compile(r'(?:(?:^|\s)\.\s+(?P<dot>[^\s]+)|(?:^|\s)&\s*(?P<amp>[^\s]+))')
+        self._rx_dyn_sh  = re.compile(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|`|\$\(|\beval\b')
+        self._rx_dyn_cmd = re.compile(r'%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!')
+        self._rx_dyn_ps1 = re.compile(r'(?<!\w)\$[A-Za-z_]\w*|\$\(|Join-Path|Resolve-Path|Invoke-Expression')
 
     def _lang(self, p: str) -> str:
         p=p.lower()
@@ -288,12 +302,51 @@ class Reader:
             t
         ))
 
+    def _is_dynamic_sh(self, s: str) -> bool:
+        return bool(self._rx_dyn_sh.search(s))
+
+    def _is_dynamic_cmd(self, s: str) -> bool:
+        return bool(self._rx_dyn_cmd.search(s))
+
+    def _is_dynamic_ps1(self, full: str, tgt: str) -> bool:
+        return bool(tgt.strip().startswith("$") or self._rx_dyn_ps1.search(full))
+
+    def _expand_cmd_value(self, s: str, env: dict[str,str], loop_vars: dict[str,str]) -> str:
+        """
+        Expand a CMD expression using a small, order-aware model:
+          - %%F      => loop_vars['F'] (if present)
+          - !VAR!    => env['VAR']    (delayed expansion)
+          - %VAR%    => env['VAR']    (normal expansion)
+        Runs a few passes to allow chained expansions.
+        """
+        if s is None: return ""
+        out = s.strip().strip('"').strip("'")
+
+        def sub_loop(m: re.Match) -> str:
+            k = m.group(1).upper()
+            return loop_vars.get(k, m.group(0))
+
+        for _ in range(4):
+            prev = out
+            # first: FOR loop tokens
+            out = re.sub(r'%%([A-Za-z])', sub_loop, out)
+            # then: variable expansions (case-insensitive names)
+            for k, v in env.items():
+                kk = k.upper()
+                vv = (v or "").strip().strip('"').strip("'")
+                out = out.replace(f"%{kk}%", vv).replace(f"!{kk}!", vv)
+            if out == prev:
+                break
+        return out.replace("\\", "/")
+
 
     def run(self, io: RoleIO, manifest: ReadManifest) -> ObservationBatch:
         files_meta, env_vars, call_sites = [], [], []
         total = len(manifest.files)
+
         for i, it in enumerate(sorted(manifest.files, key=lambda x: -x["priority"])):
-            rel = it["path"]; path = io.root / rel
+            rel = it["path"]
+            path = io.root / rel
             lang = self._lang(rel)
             try:
                 peek = it.get("peek", [(0,4096)])[0]
@@ -301,48 +354,47 @@ class Reader:
                 text = data.decode("utf-8", errors="ignore")
             except Exception:
                 text = ""
+
             files_meta.append({"path": rel, "lang": lang, "size": path.stat().st_size if path.exists() else 0, "hash": ""})
             if self.logger and (i % 10 == 0 or i == total):
                 self.logger.log("INFO", f"Reader: {i}/{total} files peeked")
-            # env vars
-            if lang=="sh":
+
+            if lang == "sh":
+                # 1) env vars (coarse but effective)
                 for m in self._rx_env_sh.finditer(text):
                     env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
-            elif lang=="cmd":
-                for m in self._rx_env_cmd.finditer(text):
-                    env_vars.append({"scope": rel, "name": m.group(1), "value": m.group(2), "prec": 10})
-            # optional LLM reader-hints (path-like vars) — conservative, opt-in        
-            if self.use_llm_hints and self.client and text.strip():
-                try:
-                    hints, why, meta, user = _llm_read_hints(self.client, rel, text, redactor=self._redactor)
-                    if hints:
-                        for k, v in hints.items():
-                            env_vars.append({"scope": rel, "name": k, "value": v, "prec": 5})  # lower precedence than explicit env
-                    if self.logger:
-                        self.logger.log_llm(role="reader", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
-                                            prompt_chars=len(user), input_tokens=meta.get("prompt_tokens"),
-                                            output_tokens=meta.get("completion_tokens"), total_tokens=meta.get("total_tokens"),
-                                            latency_ms=float(meta.get("latency_ms") or 0.0), status="ok",
-                                            src=rel, command_snippet="reader-hints", targets_count=len(hints), reasoning=(why or "")[:500])
-                        if self.log_prompts:
-                            self.logger.log_prompt(role="reader", prompt=user)
-                except Exception as ex:
-                    if self.logger:
-                        self.logger.log_llm(role="reader", status=f"error:{ex}", targets_count=0)
 
-            # call sites
-            if lang=="sh":
+                # 2) optional LLM reader hints
+                if self.use_llm_hints and self.client and text.strip():
+                    try:
+                        hints, why, meta, user = _llm_read_hints(self.client, rel, text, redactor=self._redactor)
+                        if hints:
+                            for k, v in hints.items():
+                                env_vars.append({"scope": rel, "name": k, "value": v, "prec": 5})
+                        if self.logger:
+                            self.logger.log_llm(role="reader", model=str(meta.get("model","")), endpoint=str(meta.get("endpoint","")),
+                                                prompt_chars=len(user), input_tokens=meta.get("prompt_tokens"),
+                                                output_tokens=meta.get("completion_tokens"), total_tokens=meta.get("total_tokens"),
+                                                latency_ms=float(meta.get("latency_ms") or 0.0), status="ok",
+                                                src=rel, command_snippet="reader-hints", targets_count=len(hints), reasoning=(why or "")[:500])
+                            if self.log_prompts:
+                                self.logger.log_prompt(role="reader", prompt=user)
+                    except Exception as ex:
+                        if self.logger:
+                            self.logger.log_llm(role="reader", status=f"error:{ex}", targets_count=0)
+
+                # 3) call sites (interpreter, dot-source, direct, and var-only)
                 for m in self._rx_call_sh.finditer(text):
                     full = m.group(0).strip()
                     tgt  = m.group("target")
-                    if not self._plausible_target(tgt):   # <- skip 'utils'
+                    if not self._plausible_target(tgt):
                         continue
                     kraw = m.group("kind").strip()
                     kind = "source" if kraw.startswith((".","source")) else "call"
                     call_sites.append({
                         "src": rel, "raw": tgt, "cmd": full, "kind": kind,
                         "line": 0, "col": 0, "span": [0,0],
-                        "dynamic": 1 if ("$" in tgt or "${" in tgt) else 0, "conf": 0.7
+                        "dynamic": 1 if self._is_dynamic_sh(full) else 0, "conf": 0.7
                     })
                 for raw in text.splitlines():
                     m = self._rx_call_sh_var.search(raw)
@@ -357,33 +409,67 @@ class Reader:
                         "dynamic": 1, "conf": 0.7
                     })
 
-            elif lang=="cmd":
-                for m in self._rx_call_cmd.finditer(text):
-                    full = m.group(0).strip()
-                    tgt  = m.group("target")
-                    if not self._plausible_target(tgt):
-                        continue
-                    dyn  = 1 if ("$" in tgt or "$(" in full) else 0
-                    call_sites.append({
-                        "src": rel, "raw": tgt, "cmd": full, "kind": "call",
-                        "line": 0, "col": 0, "span": [0,0],
-                        "dynamic": dyn, "conf": 0.7
-                    })
+            elif lang == "cmd":
+                # CMD is order-sensitive. Scan once, top-to-bottom, tracking env and FOR loop bindings.
+                local_env: dict[str, str] = {}   # names stored UPPERCASE
+                loop_vars: dict[str, str] = {}   # e.g., {'F': 'step.cmd'}
 
-            elif lang=="ps1":
+                for raw in text.splitlines():
+                    line = raw.rstrip()
+
+                    # FOR loop binding (%%F)
+                    mf = self._rx_cmd_for_in.search(line)
+                    if mf:
+                        var = mf.group("var").upper()
+                        val = mf.group("val").strip().strip('"').strip("'")
+                        loop_vars[var] = val
+
+                    # 'set NAME=value' anywhere on the line (but not setlocal)
+                    for ma in self._rx_env_cmd_any.finditer(line):
+                        name = (ma.group(1) or "").upper()
+                        vraw = (ma.group(2) or "")
+                        val  = self._expand_cmd_value(vraw, local_env, loop_vars)
+                        if name:
+                            local_env[name] = val
+                            env_vars.append({"scope": rel, "name": name, "value": val, "prec": 10})
+
+                    # calls: 'call foo.cmd' or 'start foo.cmd' (dynamic if %VAR% or !VAR! appears)
+                    for mc in self._rx_call_cmd.finditer(line):
+                        full = mc.group(0).strip()
+                        tgt  = mc.group("target")
+                        if not self._plausible_target(tgt):
+                            continue
+                        dyn = 1 if self._is_dynamic_cmd(full) else 0
+                        call_sites.append({
+                            "src": rel, "raw": tgt, "cmd": full, "kind": "call",
+                            "line": 0, "col": 0, "span": [0,0],
+                            "dynamic": dyn, "conf": 0.7
+                        })
+
+                # (optional) LLM reader hints for CMD are rarely needed; omit by default
+
+            elif lang == "ps1":
+                # PowerShell call sites and dynamic markers
                 for m in self._rx_call_ps1.finditer(text):
                     full = m.group(0).strip()
                     tgt  = m.group("dot") or m.group("amp")
                     if not self._plausible_target(tgt):
                         continue
-                    is_dyn = 1 if (tgt.strip().startswith("$") or "$(" in full or "Join-Path" in full or "Invoke-Expression" in full) else 0
+                    is_dyn = 1 if self._is_dynamic_ps1(full, tgt) else 0
                     call_sites.append({
                         "src": rel, "raw": tgt, "cmd": full,
                         "kind": "source" if m.group("dot") else "call",
                         "line": 0, "col": 0, "span": [0,0],
                         "dynamic": is_dyn, "conf": 0.7
                     })
-        # Write to SQLite
+
+                # We intentionally skip PS env extraction here (rarely path-like; covered by static scan)
+
+            else:
+                # other languages: nothing for now
+                pass
+
+        # ---------- write to SQLite ----------
         if self.logger and self.logger.run_id is not None:
             c = self.logger.conn
             c.executescript("""
@@ -492,9 +578,9 @@ class Mapper:
                 g.add_edge(e)
 
         # Allowed list for LLM prompt + Python-side guard
-        allowed_set = {f["path"] for f in obs.files}
+        allowed_set = {_norm_path(f["path"]) for f in obs.files}
         allowed_list = sorted(allowed_set)  # JSON-serializable
-
+        
         seen: set[tuple[str, str, str]] = set()
         resolved = 0
         nonresolved = 0
@@ -571,8 +657,8 @@ class Mapper:
                                                 status=f"error:{ex}", src=src, command_snippet=(cmd + " [loop2]")[:200], targets_count=0)
 
 
-            # Optional heuristic fallback
-            if not targets and self.use_heuristic_fallback:
+                # Safe heuristic fallback: always attempt local substitution if LLM produced nothing
+            if not targets:
                 t = self._subst(raw, env)
                 if t != _norm_path(raw) and t in allowed_set:
                     targets = [t]
