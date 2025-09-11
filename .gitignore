@@ -17,5 +17,7 @@ artifacts/
 *.png
 *.zip
 /bundles/
-/easy/
-/hard/
+/data/
+data
+data/
+/data
