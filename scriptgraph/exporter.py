@@ -23,13 +23,17 @@ def write_artifacts(
     unresolved: list[dict],
     logger=None,
     nodes_policy: str = "participating",
+    create_run_report: bool = True,
 ) -> None:
     """
-    Serialize graph + diagnostics to predicted_graph.yaml, graph.dot, run_report.json.
+    Serialize graph + diagnostics to predicted_graph.yaml, graph.dot, and optionally run_report.json.
     nodes_policy:
       - "participating": keep only nodes that appear in at least one edge,
         plus any unresolved sources (default).
       - "all": keep graph.nodes as-is.
+    create_run_report:
+      - True: create run_report.json (default for scanner/cli usage)
+      - False: skip run_report.json creation (used when data is included in run_stats.json)
     """
     # detect platform from bundle meta.json
     windows = False
@@ -68,8 +72,13 @@ def write_artifacts(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "predicted_graph.yaml").write_text("".join(lines), encoding="utf-8")
     (out_dir / "graph.dot").write_text(graph.to_dot(), encoding="utf-8")
-    (out_dir / "run_report.json").write_text(json.dumps({
-        "coverage": coverage, "unresolved": unresolved[:50],
-    }, indent=2), encoding="utf-8")
-    if logger:
-        logger.log("INFO", f"Artifacts: {out_dir/'predicted_graph.yaml'} ; {out_dir/'run_report.json'}")
+    
+    if create_run_report:
+        (out_dir / "run_report.json").write_text(json.dumps({
+            "coverage": coverage, "unresolved": unresolved[:50],
+        }, indent=2), encoding="utf-8")
+        if logger:
+            logger.log("INFO", f"Artifacts: {out_dir/'predicted_graph.yaml'} ; {out_dir/'run_report.json'}")
+    else:
+        if logger:
+            logger.log("INFO", f"Artifacts: {out_dir/'predicted_graph.yaml'}")

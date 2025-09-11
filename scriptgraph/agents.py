@@ -109,7 +109,7 @@ def _norm_path(p: str) -> str:
     while "//" in p: p = p.replace("//", "/")
     return p
 
-def _write_run_stats(out_dir: Path, roles: str, lat_ms: dict[str, float], g: Graph, unresolved: list[dict]) -> None:
+def _write_run_stats(out_dir: Path, roles: str, lat_ms: dict[str, float], g: Graph, unresolved: list[dict], coverage: dict = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "system": roles,
@@ -118,6 +118,11 @@ def _write_run_stats(out_dir: Path, roles: str, lat_ms: dict[str, float], g: Gra
         "edges": len(g.edges),
         "unresolved": len(unresolved),
     }
+    # Add coverage data if provided
+    if coverage:
+        payload["coverage"] = coverage
+        payload["unresolved_details"] = unresolved[:50]  # Limit to first 50 for performance
+    
     (out_dir / "run_stats.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 # -------------------- LLM wrappers --------------------
@@ -1020,7 +1025,8 @@ class Writer:
 
         # Deterministic export & normalization shared by all variants
         write_artifacts(root=io.root, out_dir=out_dir, graph=snap.graph,
-                        coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger)
+                        coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger,
+                        create_run_report=False)
 
         # Optional human bullets via LLM
         if self.client:
@@ -1143,12 +1149,13 @@ class AgentRunner:
             lat_ms["Writer"] = (time.monotonic() - t0) * 1000.0
         else:
             write_artifacts(root=io.root, out_dir=outp, graph=snap.graph,
-                            coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger)
+                            coverage=snap.coverage, unresolved=snap.unresolved, logger=self.logger,
+                            create_run_report=False)
 
         lat_ms["total"] = (time.monotonic() - run_t0) * 1000.0
 
         # Persist lightweight run stats for bench.ps1
-        _write_run_stats(outp, self.roles, lat_ms, snap.graph, snap.unresolved)
+        _write_run_stats(outp, self.roles, lat_ms, snap.graph, snap.unresolved, snap.coverage)
 
         return snap.graph
 
