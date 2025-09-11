@@ -1,8 +1,0 @@
-nodes:
-  - "run.sh"
-  - "tools/worker.py"
-edges:
-  - src: "run.sh"
-    dst: "tools/worker.py"
-    kind: "call"
-    dge: "$INTERP \"$TARGET\""
