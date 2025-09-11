@@ -1,8 +1,0 @@
-nodes:
-  - "lib/filter.sh"
-  - "run.sh"
-edges:
-  - src: "run.sh"
-    dst: "lib/filter.sh"
-    kind: "call"
-    dge: "./lib/filter.sh"

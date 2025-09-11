@@ -1,8 +1,0 @@
-nodes:
-  - "run.sh"
-  - "tasks/load.sh"
-edges:
-  - src: "run.sh"
-    dst: "tasks/load.sh"
-    kind: "call"
-    dge: "./tasks/load.sh"

@@ -1,8 +1,0 @@
-nodes:
-  - "run.cmd"
-  - "tasks/sub/step.cmd"
-edges:
-  - src: "run.cmd"
-    dst: "tasks/sub/step.cmd"
-    kind: "call"
-    dge: "call \"!TARGET!\""

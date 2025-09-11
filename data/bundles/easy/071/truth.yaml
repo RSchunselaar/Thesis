@@ -1,8 +1,0 @@
-nodes:
-  - "bin/sync.sh"
-  - "run.sh"
-edges:
-  - src: "run.sh"
-    dst: "bin/sync.sh"
-    kind: "call"
-    dge: "./bin/sync.sh"

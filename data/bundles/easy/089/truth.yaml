@@ -1,8 +1,0 @@
-nodes:
-  - "run.ps1"
-  - "utils.ps1"
-edges:
-  - src: "run.ps1"
-    dst: "utils.ps1"
-    kind: "source"
-    dge: ". ./Utils.ps1"
