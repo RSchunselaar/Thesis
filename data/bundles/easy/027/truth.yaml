@@ -1,0 +1,8 @@
+nodes:
+  - "lib/rotate.sh"
+  - "run.sh"
+edges:
+  - src: "run.sh"
+    dst: "lib/rotate.sh"
+    kind: "call"
+    dge: "./lib/rotate.sh"

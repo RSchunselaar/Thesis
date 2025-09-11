@@ -1,0 +1,13 @@
+nodes:
+  - "etc/env.sh"
+  - "run.sh"
+  - "tasks/steps/filter.sh"
+edges:
+  - src: "run.sh"
+    dst: "etc/env.sh"
+    kind: "source"
+    dge: ". ./etc/env.sh"
+  - src: "run.sh"
+    dst: "tasks/steps/filter.sh"
+    kind: "call"
+    dge: "bash \"$TARGET\""

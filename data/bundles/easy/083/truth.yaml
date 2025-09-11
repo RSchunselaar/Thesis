@@ -1,0 +1,8 @@
+nodes:
+  - "run.sh"
+  - "tasks/ship.sh"
+edges:
+  - src: "run.sh"
+    dst: "tasks/ship.sh"
+    kind: "call"
+    dge: "./tasks/ship.sh"

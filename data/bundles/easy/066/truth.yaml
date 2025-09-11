@@ -1,0 +1,13 @@
+nodes:
+  - "lib/prep.sh"
+  - "lib/ship.sh"
+  - "run.sh"
+edges:
+  - src: "run.sh"
+    dst: "lib/prep.sh"
+    kind: "call"
+    dge: "./lib/prep.sh"
+  - src: "run.sh"
+    dst: "lib/ship.sh"
+    kind: "call"
+    dge: "./lib/ship.sh"

@@ -16,3 +16,6 @@ artifacts/
 .DS_Store
 *.png
 *.zip
+/bundles/
+/easy/
+/hard/

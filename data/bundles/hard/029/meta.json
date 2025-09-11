@@ -1,0 +1,11 @@
+{
+  "platform": "linux",
+  "hard": true,
+  "pattern": "mk_cmd_multi_chain",
+  "features": [
+    "delayed-expansion",
+    "for-loop",
+    "multi-hop",
+    "var-indirection"
+  ]
+}

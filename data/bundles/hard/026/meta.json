@@ -1,0 +1,10 @@
+{
+  "platform": "linux",
+  "hard": true,
+  "pattern": "mk_cmd_for_loop",
+  "features": [
+    "delayed-expansion",
+    "for-loop",
+    "var-indirection"
+  ]
+}

@@ -1,0 +1,8 @@
+nodes:
+  - "bin/sub/step.cmd"
+  - "run.cmd"
+edges:
+  - src: "run.cmd"
+    dst: "bin/sub/step.cmd"
+    kind: "call"
+    dge: "call \"!TARGET!\""

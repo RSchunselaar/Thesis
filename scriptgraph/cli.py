@@ -8,7 +8,6 @@ from .utils import disable_network
 from .logging_db import RunLogger
 from .scanner import Scanner
 from .exporter import write_artifacts
-from .graph import Graph
 from .agent_mapper import AgentMapper
 from .graph import Graph, Edge
 from .stats_cmd import summarize_graph, summarize_runs, print_graph_stats, print_run_stats  

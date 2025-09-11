@@ -252,10 +252,50 @@ def _fmt(x) -> str:
         return str(x)
 
 
+# ----------------------------- Extra helpers ---------------------------------
+
+def _tier_from_bundle(name: str) -> str:
+    s = str(name).lower()
+    if s.startswith("easy-"): return "easy"
+    if s.startswith("hard-"): return "hard"
+    return "unknown"
+
+def _make_tidy(df: pd.DataFrame, metric_key: str) -> pd.DataFrame:
+    t = df[["bundle", "role", metric_key]].copy()
+    t["tier"] = t["bundle"].apply(_tier_from_bundle)
+    return t
+
+def _performance_profile(tidy: pd.DataFrame, metric_key: str, roles: List[str], step: float = 0.05) -> pd.DataFrame:
+    thresholds = np.round(np.arange(0.0, 1.0 + step, step), 5)
+    rows = []
+    for r in roles:
+        vals = tidy.loc[tidy["role"] == r, metric_key].dropna().to_numpy()
+        n = float(len(vals))
+        for tau in thresholds:
+            frac = float(np.mean(vals >= tau)) if n > 0 else float("nan")
+            rows.append({"role": r, "threshold": float(tau), "fraction": frac})
+    return pd.DataFrame(rows)
+
+def _deltas(df: pd.DataFrame, metric_key: str, pairs: List[str]) -> pd.DataFrame:
+    """Return per-bundle deltas for pairs like ['static:2R','static:4R']."""
+    pivot = df.pivot_table(index="bundle", columns="role", values=metric_key, aggfunc="first")
+    out_rows = []
+    for pair in pairs:
+        if ":" not in pair: 
+            continue
+        a, b = pair.split(":", 1)
+        if a not in pivot.columns or b not in pivot.columns:
+            continue
+        sub = pivot[[a, b]].dropna()
+        for bundle, row in sub.iterrows():
+            diff = float(row[b] - row[a])
+            out_rows.append({"bundle": bundle, "pair": f"{a}:{b}", "diff": diff, "tier": _tier_from_bundle(bundle)})
+    return pd.DataFrame(out_rows)
+
 # ----------------------------- CLI ---------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Statistical comparisons of systems over bundles (paired tests).")
+    ap = argparse.ArgumentParser(description="Statistical comparisons of systems over bundles (paired tests) + export tidy CSVs.")
     ap.add_argument("jsonl", help="Path to artifacts/bench_results.jsonl")
     ap.add_argument("--out", help="Write Markdown report to this path (default: stdout)")
     ap.add_argument("--csv", help="Optional: write per-bundle wide CSV for the chosen metric")
@@ -265,6 +305,12 @@ def main():
     ap.add_argument("--boot", type=int, default=10000, help="Bootstrap resamples for CI (default 10000)")
     ap.add_argument("--seed", type=int, default=0, help="Random seed for bootstrap")
     ap.add_argument("--systems", nargs="*", help="Optional ordered list of systems to include (e.g., static 2R 4R)")
+    ap.add_argument("--by-tier", action="store_true", help="Also produce tier-specific sections (easy/hard).")
+    ap.add_argument("--tidy-out", help="Write tidy CSV with columns: bundle,tier,role,<metric>.")
+    ap.add_argument("--delta-out", help="Write per-bundle deltas CSV for selected pairs (default static:2R, static:4R).")
+    ap.add_argument("--pairs", nargs="*", default=["static:2R", "static:4R"], help="Pairs like A:B to compute deltas.")
+    ap.add_argument("--cdf-out", help="Write performance profile CSV with columns: role,threshold,fraction.")
+    ap.add_argument("--lat-csv", help="If latency columns exist, write CSV with bundle,role,lat_* columns.")
     args = ap.parse_args()
 
     rows = _load_jsonl(args.jsonl)
@@ -301,25 +347,34 @@ def main():
     if not recs:
         sys.exit("No usable records found (missing bundle/role/score).")
 
-    df = pd.DataFrame.from_records(recs)
+    df_all = pd.DataFrame.from_records(recs)
     metric_key = args.metric
-    if metric_key not in df.columns:
+    if metric_key not in df_all.columns:
         # allow synonyms
         alt = f"score.{metric_key}"
-        if alt in df.columns:
+        if alt in df_all.columns:
             metric_key = alt
         else:
-            avail = ", ".join(sorted([c for c in df.columns if c not in ("bundle", "role")]))
+            avail = ", ".join(sorted([c for c in df_all.columns if c not in ("bundle", "role")] ))
             sys.exit(f"Metric '{args.metric}' not found. Available: {avail}")
 
     # Optional CSV of the wide table (for your appendix)
-    pivot = df.pivot_table(index="bundle", columns="role", values=metric_key, aggfunc="first")
+    pivot = df_all.pivot_table(index="bundle", columns="role", values=metric_key, aggfunc="first")
     pivot = pivot.sort_index()
     if args.csv:
         Path(args.csv).parent.mkdir(parents=True, exist_ok=True)
         pivot.to_csv(args.csv, index=True)
 
-    report = analyze(df[["bundle", "role", metric_key]].copy(), metric_key, args.alpha, args.boot, args.seed, args.systems)
+    df_sub = df_all[["bundle", "role", metric_key]].copy()
+    report = analyze(df_sub.copy(), metric_key, args.alpha, args.boot, args.seed, args.systems)
+
+    # Tier-specific sections
+    if args.by_tier:
+        for tier in ("easy", "hard"):
+            mask = df_sub["bundle"].str.lower().str.startswith(f"{tier}-")
+            if mask.any():
+                section = analyze(df_sub.loc[mask].copy(), metric_key, args.alpha, args.boot, args.seed, args.systems)
+                report += f"\n\n---\n\n# {tier.capitalize()} tier\n\n" + section
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +383,42 @@ def main():
         print(f"Wrote {args.out}")
     else:
         print(report)
+
+    # Tidy CSV for plotting
+    if args.tidy_out:
+        tidy = _make_tidy(df_sub, metric_key)
+        Path(args.tidy_out).parent.mkdir(parents=True, exist_ok=True)
+        tidy.to_csv(args.tidy_out, index=False)
+        print(f"Wrote {args.tidy_out}")
+
+    # Per-bundle deltas for specified pairs
+    if args.delta_out:
+        deltas = _deltas(df_sub, metric_key, args.pairs)
+        Path(args.delta_out).parent.mkdir(parents=True, exist_ok=True)
+        deltas.to_csv(args.delta_out, index=False)
+        print(f"Wrote {args.delta_out}")
+
+    # Performance profile (CDF)
+    if args.cdf_out:
+        tidy = _make_tidy(df_sub, metric_key)
+        roles = list(tidy["role"].dropna().unique())
+        if args.systems:
+            roles = [r for r in args.systems if r in roles]
+        cdf = _performance_profile(tidy, metric_key, roles)
+        Path(args.cdf_out).parent.mkdir(parents=True, exist_ok=True)
+        cdf.to_csv(args.cdf_out, index=False)
+        print(f"Wrote {args.cdf_out}")
+
+    # Latency CSV, if present in JSONL
+    if args.lat_csv:
+        lat_cols = [c for c in df_all.columns if c.startswith("lat_")]
+        if lat_cols:
+            lat = df_all[["bundle", "role"] + lat_cols].copy()
+            Path(args.lat_csv).parent.mkdir(parents=True, exist_ok=True)
+            lat.to_csv(args.lat_csv, index=False)
+            print(f"Wrote {args.lat_csv}")
+        else:
+            print("No latency columns present in JSONL; skipped --lat-csv.")
 
 
 if __name__ == "__main__":

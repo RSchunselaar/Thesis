@@ -1,0 +1,13 @@
+nodes:
+  - "etc/env.sh"
+  - "run.sh"
+  - "scripts/bin/rotate.sh"
+edges:
+  - src: "run.sh"
+    dst: "etc/env.sh"
+    kind: "source"
+    dge: ". ./etc/env.sh"
+  - src: "run.sh"
+    dst: "scripts/bin/rotate.sh"
+    kind: "call"
+    dge: "bash \"$TARGET\""

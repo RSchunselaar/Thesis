@@ -14,8 +14,23 @@ def _canon_rel(p: str, root: Path, windows: bool) -> str:
         pass
     return s.lower() if windows else s
 
-def write_artifacts(*, root: Path, out_dir: Path, graph: Graph, coverage: dict, unresolved: list[dict], logger=None) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def write_artifacts(
+    *,
+    root: Path,
+    out_dir: Path,
+    graph: Graph,
+    coverage: dict,
+    unresolved: list[dict],
+    logger=None,
+    nodes_policy: str = "participating",
+) -> None:
+    """
+    Serialize graph + diagnostics to predicted_graph.yaml, graph.dot, run_report.json.
+    nodes_policy:
+      - "participating": keep only nodes that appear in at least one edge,
+        plus any unresolved sources (default).
+      - "all": keep graph.nodes as-is.
+    """
     # detect platform from bundle meta.json
     windows = False
     try:
@@ -23,6 +38,20 @@ def write_artifacts(*, root: Path, out_dir: Path, graph: Graph, coverage: dict, 
         windows = str(meta.get("platform","")).lower() == "windows"
     except Exception:
         pass
+
+    # --- Apply node policy before serialization ---
+    if nodes_policy == "participating":
+        used = set()
+        for e in graph.edges:
+            used.add(e.src); used.add(e.dst)
+        # Keep unresolved sources visible for triage
+        for u in (unresolved or []):
+            src = u.get("src")
+            if src:
+                used.add(src)
+        # Drop orphans deterministically
+        graph.nodes = {n: meta for n, meta in graph.nodes.items() if n in used}
+
     # YAML export
     nodes = sorted({ _canon_rel(n, root, windows) for n in graph.nodes.keys() })
     lines = ["nodes:\n"] + [f"  - {json.dumps(n)}\n" for n in nodes]
@@ -36,6 +65,7 @@ def write_artifacts(*, root: Path, out_dir: Path, graph: Graph, coverage: dict, 
         if getattr(e, "resolved", None) is not None:  lines.append(f"    resolved: {str(bool(e.resolved)).lower()}\n")
         if getattr(e, "confidence", None) is not None: lines.append(f"    confidence: {float(e.confidence):.3f}\n")
         if getattr(e, "reason", None):    lines.append(f"    reason: {json.dumps(e.reason)}\n")
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "predicted_graph.yaml").write_text("".join(lines), encoding="utf-8")
     (out_dir / "graph.dot").write_text(graph.to_dot(), encoding="utf-8")
     (out_dir / "run_report.json").write_text(json.dumps({

@@ -1,0 +1,8 @@
+{
+  "platform": "linux",
+  "hard": false,
+  "pattern": "mk_ps_dotsource",
+  "features": [
+    "dot-sourcing"
+  ]
+}

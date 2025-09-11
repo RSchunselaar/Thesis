@@ -1,0 +1,10 @@
+{
+  "platform": "windows",
+  "hard": true,
+  "pattern": "mk_shell_interp_python_var",
+  "features": [
+    "cross-language",
+    "interpreter-hop-python",
+    "var-indirection"
+  ]
+}

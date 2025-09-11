@@ -1,0 +1,13 @@
+nodes:
+  - "etc/env.sh"
+  - "run.sh"
+  - "tasks/tasks/merge.sh"
+edges:
+  - src: "run.sh"
+    dst: "etc/env.sh"
+    kind: "source"
+    dge: ". ./etc/env.sh"
+  - src: "run.sh"
+    dst: "tasks/tasks/merge.sh"
+    kind: "call"
+    dge: "bash \"$TARGET\""

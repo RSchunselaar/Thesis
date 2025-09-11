@@ -12,6 +12,9 @@ authors = [{name = "You"}]
 dependencies = [
   "PyYAML>=6.0",
   "requests>=2.31",   # OK if you applied the external LLM patch; harmless otherwise
+  "pandas>=2.0.0",
+  "numpy>=1.24.0",
+  "scipy>=1.10.0",
 ]
 
 [project.scripts]

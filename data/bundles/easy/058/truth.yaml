@@ -1,0 +1,13 @@
+nodes:
+  - "jobs/filter.sh"
+  - "jobs/prep.sh"
+  - "run.sh"
+edges:
+  - src: "run.sh"
+    dst: "jobs/prep.sh"
+    kind: "call"
+    dge: "./jobs/prep.sh"
+  - src: "run.sh"
+    dst: "jobs/filter.sh"
+    kind: "call"
+    dge: "./jobs/filter.sh"

@@ -1,0 +1,13 @@
+nodes:
+  - "run.sh"
+  - "steps/prep.sh"
+  - "steps/ship.sh"
+edges:
+  - src: "run.sh"
+    dst: "steps/ship.sh"
+    kind: "call"
+    dge: "./steps/ship.sh"
+  - src: "run.sh"
+    dst: "steps/prep.sh"
+    kind: "call"
+    dge: "./steps/prep.sh"

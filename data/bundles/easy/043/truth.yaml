@@ -1,0 +1,8 @@
+nodes:
+  - "run.sh"
+  - "steps/sync.sh"
+edges:
+  - src: "run.sh"
+    dst: "steps/sync.sh"
+    kind: "call"
+    dge: "./steps/sync.sh"

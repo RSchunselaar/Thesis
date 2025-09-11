@@ -1,0 +1,10 @@
+{
+  "platform": "linux",
+  "hard": true,
+  "pattern": "mk_ps_multi_chain",
+  "features": [
+    "dot-sourcing",
+    "multi-hop",
+    "var-indirection"
+  ]
+}

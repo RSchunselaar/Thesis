@@ -1,0 +1,13 @@
+nodes:
+  - "etc/env.sh"
+  - "jobs/tasks/sync.sh"
+  - "run.sh"
+edges:
+  - src: "run.sh"
+    dst: "etc/env.sh"
+    kind: "source"
+    dge: ". ./etc/env.sh"
+  - src: "run.sh"
+    dst: "jobs/tasks/sync.sh"
+    kind: "call"
+    dge: "bash \"$TARGET\""

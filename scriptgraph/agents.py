@@ -709,25 +709,7 @@ class Mapper:
         g = Graph()
         unresolved: list[dict] = []
 
-        static_sources = {}
-        for e in getattr(io, "graph", Graph()).edges:
-            if (not e.dynamic) and e.kind == "source":
-                static_sources.setdefault(e.src, []).append(e.dst)
-
-        def env_for(src: str) -> dict[str,str]:
-            # local vars
-            env = {v["name"]: v["value"] for v in obs.env_vars if v["scope"] == src}
-            # one-hop import from statically-sourced files
-            for t in static_sources.get(src, []):
-                for v in obs.env_vars:
-                    if v["scope"] == t and v["name"] not in env:
-                        env[v["name"]] = v["value"]
-            # derive PS Join-Path assignments at call site using imported vars
-            if src.lower().endswith(".ps1"):
-                env = self._ps_eval_joins(io, src, env)
-            return env
-
-        # Allowed list for LLM prompt + Python-side guard: FULL project index (not only peeked files)
+        # --- Build allowed file index and platform case policy early ---
         ALLOWED_EXTS = (".sh",".bash",".ksh",".bat",".cmd",".ps1",".pl",".py")
         allowed_set: set[str] = set()
         for ext in ALLOWED_EXTS:
@@ -737,8 +719,6 @@ class Mapper:
                     allowed_set.add(_norm_path(rel))
                 except Exception:
                     pass
- 
-        # Decide case policy from bundle meta.json
         windowsish = False
         try:
             meta = json.loads((io.root / "meta.json").read_text(encoding="utf-8"))
@@ -747,8 +727,98 @@ class Mapper:
             pass
         def _canon_case(p: str) -> str:
             return p.lower() if windowsish else p
-        ALLOWED_PREFIXES = (". ", "source ", "& ", "call ", "start ", "bash ", "sh ", "ksh ", "python ", "python3 ", "perl ")
+        allowed_lower = {p.lower() for p in allowed_set}
+        allowed_list = sorted(allowed_set)
+        has_static_baseline = any(not e.dynamic for e in getattr(io, "graph", Graph()).edges)
 
+        # Collect statically-known source imports (if baseline is present)
+        static_sources: dict[str, list[str]] = {}
+        for e in getattr(io, "graph", Graph()).edges:
+            if (not e.dynamic) and e.kind == "source":
+                static_sources.setdefault(e.src, []).append(e.dst)
+
+        # Quick index of observed dot-source call sites per src
+        source_calls_by_src: dict[str, list[dict]] = {}
+        for cs in obs.call_sites:
+            if cs["kind"] == "source":
+                source_calls_by_src.setdefault(cs["src"], []).append(cs)
+
+        def _resolve_sourced_target(src: str, raw: str) -> Optional[str]:
+            """
+            Resolve a dot-sourced target using local substitutions and caller-relative paths.
+            Works even without a static baseline.
+            """
+            # Try local substitution using vars defined in the same script
+            local_env = {v["name"]: v["value"] for v in obs.env_vars if v["scope"] == src}
+            cand1 = self._subst(raw, local_env)
+            for tok in [cand1, _norm_path(raw)]:
+                if not tok:
+                    continue
+                if (tok in allowed_set) or (windowsish and tok.lower() in allowed_lower):
+                    return tok
+                rel = _norm_path(os.path.join(os.path.dirname(src), tok))
+                if (rel in allowed_set) or (windowsish and rel.lower() in allowed_lower):
+                    return rel
+            return None
+
+        def env_for(src: str) -> dict[str,str]:
+            """
+            Build an env map for 'src' where:
+              1) within the same scope, higher 'prec' wins,
+              2) local scope wins over imported scopes,
+              3) imported scopes fill only missing names (no override).
+            """
+            def _sorted_pairs_for(scope: str) -> list[dict]:
+                pairs = [v for v in obs.env_vars if v.get("scope") == scope]
+                # higher precedence first; stable sort
+                pairs.sort(key=lambda v: int(v.get("prec", 0)), reverse=True)
+                return pairs
+
+            env: dict[str, str] = {}
+
+            # 1) Local variables for 'src', apply precedence
+            for v in _sorted_pairs_for(src):
+                name, val = v.get("name"), v.get("value")
+                if name and val and name not in env:
+                    env[name] = val
+
+            # 2) One-hop import from statically-sourced files, fill only missing
+            for t in static_sources.get(src, []):
+                for v in _sorted_pairs_for(t):
+                    name, val = v.get("name"), v.get("value")
+                    if name and val and name not in env:
+                        env[name] = val
+
+            # 3) One-hop import from locally observed dot-sources (non-dynamic)
+            for cs in source_calls_by_src.get(src, []):
+                if cs.get("dynamic", 0):
+                    continue
+                tgt = _resolve_sourced_target(src, cs["raw"])
+                if not tgt:
+                    continue
+                for v in _sorted_pairs_for(tgt):
+                    name, val = v.get("name"), v.get("value")
+                    if name and val and name not in env:
+                        env[name] = val
+
+            # 4) PowerShell Join-Path derivations at call site
+            if src.lower().endswith(".ps1"):
+                env = self._ps_eval_joins(io, src, env)
+            return env
+
+        ALLOWED_PREFIXES = (
+            ". ", "source ", "& ", "call ", "start ",
+            "bash ", "sh ", "ksh ", "python ", "python3 ", "perl "
+        )
+        # Accept direct script invocations like: ./x.sh, x.sh, utils/x.sh, "utils/x.sh"
+        DIRECT_CALL_RE = re.compile(
+            r"""^["']?                  # optional opening quote
+                (?:\./|../|/)?          # optional ./, ../ or /
+                [\w./-]+
+                \.(?:sh|bash|ksh|bat|cmd|ps1|pl|py)  # known script ext
+                (?:\s|["']?$)           # end or whitespace or closing quote
+            """, re.VERBOSE | re.IGNORECASE
+        )
         # carry over static edges, canonicalized, with sanity filters
         for e in getattr(io, "graph", Graph()).edges:
             if not e.dynamic:
@@ -758,7 +828,7 @@ class Mapper:
                 if not ((dst_c in allowed_set) or (windowsish and dst_c in {p.lower() for p in allowed_set})):
                     continue
                 # If we have a command string, require it to look like a real invocation
-                if cmd and not any(cmd.startswith(pfx) for pfx in ALLOWED_PREFIXES):
+                if cmd and not (any(cmd.startswith(pfx) for pfx in ALLOWED_PREFIXES) or DIRECT_CALL_RE.match(cmd)):
                     continue
                 g.add_edge(Edge(
                     src=_canon_case(e.src), dst=dst_c,
@@ -767,8 +837,6 @@ class Mapper:
                     confidence=e.confidence, reason=e.reason
                 ))
         
-        allowed_lower = {p.lower() for p in allowed_set}
-        allowed_list = sorted(allowed_set)
 
         seen: set[tuple[str, str, str]] = set()
         resolved = 0
@@ -780,11 +848,38 @@ class Mapper:
             cmd = cs.get("cmd") or f"{kind} {raw}"
             env = env_for(src)
 
-            # --- IMPORTANT: skip static call-sites ---
-            # Static (non-dynamic) edges were already captured by the Scanner and
-            # carried over above. Avoid re-adding them here to prevent duplicates.
+            # --- Non-dynamic call-sites: if no static baseline, resolve and keep them ---
             if not cs.get("dynamic", 0):
-                g.add_node(src)  # keep node coverage consistent
+                if not has_static_baseline:
+                    direct_candidates: list[str] = []
+                    # Prefer local substitution first (covers things like ". ${UTILS}/lib.sh")
+                    t_sub = self._subst(raw, env)
+                    if t_sub and t_sub != _norm_path(raw):
+                        direct_candidates.append(t_sub)
+                    direct_candidates.append(_norm_path(raw))
+                    added = False
+                    for t in direct_candidates:
+                        # as-is
+                        if (t in allowed_set) or (windowsish and t.lower() in allowed_lower):
+                            g.add_edge(Edge(src=_canon_case(src), dst=_canon_case(t), kind=kind,
+                                            command=cmd, dynamic=False, resolved=True, confidence=0.9,
+                                            reason="static-direct in 2R/4R"))
+                            added = True
+                            break
+                        # relative to caller
+                        rel = _norm_path(os.path.join(os.path.dirname(src), t))
+                        if (rel in allowed_set) or (windowsish and rel.lower() in allowed_lower):
+                            g.add_edge(Edge(src=_canon_case(src), dst=_canon_case(rel), kind=kind,
+                                            command=cmd, dynamic=False, resolved=True, confidence=0.9,
+                                            reason="static-direct in 2R/4R"))
+                            added = True
+                            break
+                    if not added:
+                        g.add_node(src)
+                        unresolved.append({"src": _canon_case(src), "raw_target": raw, "reason": "non-dynamic-unresolved"})
+                else:
+                    # baseline present: these edges were already carried over, avoid duplicates
+                    g.add_node(src)
                 continue
 
             # LLM first

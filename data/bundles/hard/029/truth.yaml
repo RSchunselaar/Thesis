@@ -1,0 +1,8 @@
+nodes:
+  - "Run.cmd"
+  - "tasks/work/step.cmd"
+edges:
+  - src: "Run.cmd"
+    dst: "tasks/work/step.cmd"
+    kind: "call"
+    dge: "call \"!TARGET!\""
